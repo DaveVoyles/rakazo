@@ -63,12 +63,19 @@ export class DockerSandboxProvider implements SandboxProvider {
   // profile. Screen VIEWING is safely shared already (x11vnc -shared serves
   // any number of simultaneous viewers of the one desktop); who gets to
   // actually drive it is gated separately by the execution lease.
-  private headers(context: AdapterContext, botId?: string) {
+  private headers(
+    context: AdapterContext,
+    botId?: string,
+    opts?: { includeScreenLease?: boolean },
+  ) {
+    const includeScreenLease = opts?.includeScreenLease !== false;
     return {
       authorization: `Bearer ${this.supervisorToken}`,
       "x-rakazo-workspace-id": context.workspaceId,
       ...(botId ? { "x-rakazo-bot-id": botId } : {}),
-      ...(context.screenLeaseId ? { "x-rakazo-screen-lease-id": context.screenLeaseId } : {}),
+      ...(includeScreenLease && context.screenLeaseId
+        ? { "x-rakazo-screen-lease-id": context.screenLeaseId }
+        : {}),
     };
   }
 
@@ -194,7 +201,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   async observe(computer: ComputerRef, context: AdapterContext): Promise<ComputerObservation> {
     const res = await fetch(this.url(`/computers/${computer.id}/observe`), {
       method: "POST",
-      headers: this.headers(context, computer.botId),
+      headers: this.headers(context, computer.botId, { includeScreenLease: false }),
       signal: context.signal,
     });
     if (!res.ok)

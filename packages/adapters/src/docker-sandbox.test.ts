@@ -48,6 +48,29 @@ describe("Docker sandbox", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty("x-rakazo-screen-id");
   });
 
+  it("observes without the screen lease so a user takeover can still be screenshot", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        image: Buffer.from("png").toString("base64"),
+        mimeType: "image/png",
+        width: 1280,
+        height: 800,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
+    await provider.observe(
+      { id: "computer", botId: "home-bot", kind: "docker", providerRef: "computer" },
+      context,
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty("x-rakazo-screen-lease-id");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "x-rakazo-bot-id": "home-bot",
+      "x-rakazo-workspace-id": "workspace",
+    });
+  });
+
+
   it("releases this bot's screen assignment through the supervisor", async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
