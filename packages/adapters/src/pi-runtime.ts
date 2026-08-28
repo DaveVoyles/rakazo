@@ -67,6 +67,12 @@ export function maxToolCallsPerTurn(env: NodeJS.ProcessEnv = process.env): numbe
   return Math.floor(parsed);
 }
 
+export function resolveCatalogModelId(provider: string, modelId: string): string {
+  const prefix = `${provider}/`;
+  return modelId.startsWith(prefix) ? modelId.slice(prefix.length) : modelId;
+}
+
+
 export class PiAgentRuntime implements AgentRuntime {
   describe() {
     return {
@@ -101,7 +107,7 @@ export class PiAgentRuntime implements AgentRuntime {
             ? envDefaultModel || "deepseek/deepseek-v4-flash-0731"
             : request.model.id.trim();
         const models = modelsForRequest(request, provider);
-        let model = models.getModel(provider, modelId);
+        let model = models.getModel(provider, resolveCatalogModelId(provider, modelId));
         if (!model && provider !== "openrouter" && provider !== OPENAI_COMPATIBLE_PROVIDER_ID) {
           model = models.getModel("openrouter", modelId);
         }

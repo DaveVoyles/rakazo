@@ -402,6 +402,29 @@ export function buildApprovalContinuation(
   ].join("\n");
 }
 
+export function runWallClockTimeoutMs(modelId: string | null | undefined): number {
+  return modelId === "qwen2.5:32b" ? 90_000 : 600_000;
+}
+
+async function markRunTimedOut(
+  prisma: PrismaClient,
+  runId: string,
+  wallClockMs: number,
+): Promise<void> {
+  await prisma.run.updateMany({
+    where: { id: runId, status: "running" },
+    data: {
+      status: "failed",
+      error: `timed out after ${wallClockMs}ms`,
+      completedAt: new Date(),
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    },
+  });
+}
+
+
+
 export function createRunExecutor(deps: ExecutorDeps) {
   return {
     async resolveModel(scope: {
@@ -630,10 +653,16 @@ export function createRunExecutor(deps: ExecutorDeps) {
       if (started.count !== 1) return;
       const leaseTarget = await deps.prisma.bot.findUniqueOrThrow({
         where: { id: run.botId },
-        select: { computerId: true, computerSwitching: true },
+        select: { computerId: true, computerSwitching: true, modelId: true },
       });
       if (!leaseTarget.computerId) throw new Error("Bot has no computer");
       if (leaseTarget.computerSwitching) {
+        const wallClockMs = runWallClockTimeoutMs(leaseTarget.modelId);
+        const runningSince = current.startedAt ?? new Date();
+        if (Date.now() - runningSince.getTime() >= wallClockMs) {
+          await markRunTimedOut(deps.prisma, runId, wallClockMs);
+          return;
+        }
         await requeueComputerRun(deps, runId, workerId, fence, resumeCheckpoint);
         return;
       }
@@ -647,6 +676,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
         });
       } catch (error) {
         if (!(error instanceof ComputerBusyError)) throw error;
+        const wallClockMs = runWallClockTimeoutMs(leaseTarget.modelId);
+        const runningSince = current.startedAt ?? new Date();
+        if (Date.now() - runningSince.getTime() >= wallClockMs) {
+          await markRunTimedOut(deps.prisma, runId, wallClockMs);
+          return;
+        }
         await requeueComputerRun(deps, runId, workerId, fence, resumeCheckpoint);
         return;
       }
@@ -664,6 +699,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
       let retainComputerLease = false;
       let screenRelease: { computer: ComputerRef; context: AdapterContext } | undefined;
       let runAbortController: AbortController | null = null;
+      let wallClockTimer: ReturnType<typeof setTimeout> | undefined;
       const heartbeat = setInterval(() => {
         void Promise.all([
           renewRunLease(deps, runId, workerId, fence),
@@ -741,6 +777,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
         const credential = useModelOverride ? overrideCredential! : defaultCredential;
         runAbortController = new AbortController();
         if (!leaseValid) runAbortController.abort();
+        const wallClockMs = runWallClockTimeoutMs(bot.modelId);
+        wallClockTimer = setTimeout(() => {
+          leaseValid = false;
+          runAbortController?.abort();
+          clearInterval(heartbeat);
+          void markRunTimedOut(deps.prisma, runId, wallClockMs);
+        }, wallClockMs);
+        wallClockTimer.unref?.();
         const composioRows = storedConnections.filter(
           (connection) => connection.connectorId === "composio",
         );
@@ -2626,6 +2670,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         }
       } finally {
         clearInterval(heartbeat);
+        if (wallClockTimer) clearTimeout(wallClockTimer);
         if (!retainComputerLease) {
           if (screenRelease) {
             await deps.sandbox

@@ -292,10 +292,16 @@ export function reduceThreadSnapshot(
   if (isRunTerminalEvent(event)) {
     const activeRuns = prev.activeRuns?.filter((candidate) => candidate.id !== event.runId);
     const nextMemberRun = activeRuns?.find((candidate) => candidate.botId === event.botId);
+    const liveId = progressMessageId(event);
+    const hasDurable = prev.messages.some(
+      (message) => message.runId === event.runId && !message.id.startsWith("progress:"),
+    );
     return {
       ...prev,
       cursor: event.seq,
-      messages: prev.messages.filter((message) => message.id !== progressMessageId(event)),
+      messages: hasDurable
+        ? prev.messages.filter((message) => message.id !== liveId)
+        : prev.messages,
       members: updateMemberStatus(prev.members, event.botId, nextMemberRun?.status ?? "idle"),
       run: prev.run?.id === event.runId ? (activeRuns?.[0] ?? null) : prev.run,
       activeRuns,

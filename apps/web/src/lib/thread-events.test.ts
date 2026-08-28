@@ -265,6 +265,48 @@ describe("thread event reduction", () => {
     expect(progressed?.cursor).toBe(4);
   });
 
+  it("keeps the live progress bubble when run.completed arrives without a durable bot message", () => {
+    const run = threadRun("run-1");
+    const live = {
+      ...message("progress:run-1", [{ kind: "progress", text: "17s result" }]),
+      runId: run.id,
+    };
+    const initial: ThreadSnapshot = {
+      ...snapshot([live]),
+      run,
+      activeRuns: [run],
+    };
+    const next = reduceThreadSnapshot(
+      initial,
+      event({ type: "run.completed", seq: 6, runId: run.id }),
+    );
+    expect(next?.messages.map((item) => item.id)).toEqual(["progress:run-1"]);
+    expect(next?.messages[0]?.blocks).toEqual([{ kind: "progress", text: "17s result" }]);
+  });
+
+  it("drops live progress when a durable bot message already exists for the run", () => {
+    const run = threadRun("run-1");
+    const durable = {
+      ...message("msg-1", [{ kind: "text", text: "done" }]),
+      runId: run.id,
+    };
+    const live = {
+      ...message("progress:run-1", [{ kind: "progress", text: "working" }]),
+      runId: run.id,
+    };
+    const initial: ThreadSnapshot = {
+      ...snapshot([durable, live]),
+      run,
+      activeRuns: [run],
+    };
+    const next = reduceThreadSnapshot(
+      initial,
+      event({ type: "run.completed", seq: 6, runId: run.id }),
+    );
+    expect(next?.messages.map((item) => item.id)).toEqual(["msg-1"]);
+  });
+
+
   it("preserves bot_message when event-sourcing a peer run", () => {
     const started = reduceThreadSnapshot(
       snapshot([]),
@@ -507,7 +549,7 @@ describe("thread event reduction", () => {
     expect(completed?.members?.[0]?.status).toBe("idle");
   });
 
-  it("clears only the terminal run's live progress", () => {
+  it("keeps the terminal run's live progress when no durable message exists", () => {
     const runA = threadRun("run-a", "bot-a");
     const runB = threadRun("run-b", "bot-b");
     const initial: ThreadSnapshot = {
@@ -529,7 +571,7 @@ describe("thread event reduction", () => {
     const next = reduceThreadSnapshot(initial, failed);
 
     expect(isThreadSnapshotEvent(failed)).toBe(true);
-    expect(next?.messages.map((item) => item.id)).toEqual(["progress:run-b"]);
+    expect(next?.messages.map((item) => item.id)).toEqual(["progress:run-a", "progress:run-b"]);
     expect(next?.run).toEqual(runB);
     expect(next?.activeRuns).toEqual([runB]);
     expect(next?.cursor).toBe(10);

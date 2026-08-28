@@ -1,7 +1,17 @@
 import { ONCE_ROUTINE_CRON } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
-import { createRunExecutor } from "./executor.js";
+import { createRunExecutor, runWallClockTimeoutMs } from "./executor.js";
+
+
+describe("runWallClockTimeoutMs", () => {
+  it("uses 90s for qwen2.5:32b and 10min otherwise", () => {
+    expect(runWallClockTimeoutMs("qwen2.5:32b")).toBe(90_000);
+    expect(runWallClockTimeoutMs("openai/gpt-4o-mini")).toBe(600_000);
+    expect(runWallClockTimeoutMs(null)).toBe(600_000);
+    expect(runWallClockTimeoutMs(undefined)).toBe(600_000);
+  });
+});
 
 describe("createRunExecutor", () => {
   it("deactivates one-shot routines after wake without scheduling another wakeup", async () => {

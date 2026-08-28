@@ -1,7 +1,7 @@
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import { describe, expect, it } from "vitest";
 import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./pi-openai-compatible-provider.js";
-import { modelsForRequest } from "./pi-runtime.js";
+import { modelsForRequest, resolveCatalogModelId } from "./pi-runtime.js";
 
 function requestModel(id: string, baseUrl: string): Pick<AgentRunRequest, "model"> {
   return { model: { provider: OPENAI_COMPATIBLE_PROVIDER_ID, id, baseUrl } };
@@ -26,5 +26,12 @@ describe("request model catalogs", () => {
     expect(second.getModel(OPENAI_COMPATIBLE_PROVIDER_ID, "second-model")?.baseUrl).toBe(
       "http://127.0.0.1:8002/v1",
     );
+  });
+});
+
+describe("resolveCatalogModelId", () => {
+  it("strips a duplicated provider prefix before catalog lookup", () => {
+    expect(resolveCatalogModelId("openrouter", "openrouter/auto")).toBe("auto");
+    expect(resolveCatalogModelId("openrouter", "openai/gpt-4o-mini")).toBe("openai/gpt-4o-mini");
   });
 });
