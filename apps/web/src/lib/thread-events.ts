@@ -318,7 +318,7 @@ export function reduceThreadSnapshot(
     return {
       ...prev,
       cursor: event.seq,
-      messages: hasDurable
+      messages: hasDurable || event.type === "run.failed"
         ? prev.messages.filter((message) => message.id !== liveId)
         : prev.messages.map((message) =>
             message.id === liveId ? { ...message, id: `kept:${event.runId}` } : message,
