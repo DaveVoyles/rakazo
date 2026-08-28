@@ -158,6 +158,7 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       host: "127.0.0.1",
+      allowedHosts: [previewHost, ".ts.net", ".local"],
       port: webPort,
       strictPort: true,
       proxy: {
