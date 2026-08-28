@@ -572,7 +572,7 @@ describe("thread event reduction", () => {
     const next = reduceThreadSnapshot(initial, failed);
 
     expect(isThreadSnapshotEvent(failed)).toBe(true);
-    expect(next?.messages.map((item) => item.id)).toEqual(["kept:run-a", "progress:run-b"]);
+    expect(next?.messages.map((item) => item.id)).toEqual(["progress:run-b"]);
     expect(next?.run).toEqual(runB);
     expect(next?.activeRuns).toEqual([runB]);
     expect(next?.cursor).toBe(10);
