@@ -19,8 +19,9 @@ import type {
 } from "@rakazo/adapter-kit";
 import { isToolPauseResult } from "./approval-effect.js";
 import { builtinAgentTools, DELEGATION_TOOL_NAMES } from "./builtin-tools.js";
+import { parseLeakedToolCall, shouldHoldLeakedToolText } from "./leaked-tool-call.js";
 import { PiRuntimeCredentialStore, toOAuthCredential } from "./pi-credentials.js";
-import { registerLocalProvider } from "./pi-local-provider.js";
+import { LOCAL_PROVIDER_ID, registerLocalProvider } from "./pi-local-provider.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_ID,
   registerOpenAiCompatibleCatalog,
@@ -177,6 +178,9 @@ export class PiAgentRuntime implements AgentRuntime {
         let streamed = "";
         let toolCalls = 0;
         let toolActivityShowing = false;
+        let heldLocalLeak = false;
+        const allowedToolNames = new Set(toolDefs.map((tool) => tool.name));
+        const holdLocalLeaks = provider === LOCAL_PROVIDER_ID;
         agent.subscribe((event) => {
           if (event.type === "tool_execution_start") {
             if (!consumeToolCall(host)) return;
@@ -184,6 +188,7 @@ export class PiAgentRuntime implements AgentRuntime {
             // Live activity feedback: without this the thread shows a bare
             // "working…" for the whole tool call with nothing actionable.
             toolActivityShowing = true;
+            heldLocalLeak = false;
             queue.push({
               type: "progress",
               text: describeToolActivity(event.toolName, event.args),
@@ -201,6 +206,14 @@ export class PiAgentRuntime implements AgentRuntime {
                 queue.push({ type: "progress", text: "" });
               }
               streamed += delta;
+              if (
+                holdLocalLeaks &&
+                host.toolCallBudget.count === 0 &&
+                shouldHoldLeakedToolText(streamed)
+              ) {
+                heldLocalLeak = true;
+                return;
+              }
               queue.push({ type: "text", text: delta });
             }
           }
@@ -208,7 +221,15 @@ export class PiAgentRuntime implements AgentRuntime {
             const text = assistantText(event.message);
             if (text && !streamed) {
               streamed = text;
-              queue.push({ type: "text", text });
+              if (
+                holdLocalLeaks &&
+                host.toolCallBudget.count === 0 &&
+                shouldHoldLeakedToolText(streamed)
+              ) {
+                heldLocalLeak = true;
+              } else {
+                queue.push({ type: "text", text });
+              }
             }
             if ("usage" in event.message && event.message.usage) {
               queue.push({
@@ -234,6 +255,29 @@ export class PiAgentRuntime implements AgentRuntime {
           await agent.waitForIdle();
         } finally {
           signal.removeEventListener("abort", onAbort);
+        }
+
+        if (
+          holdLocalLeaks &&
+          host.toolCallBudget.count === 0 &&
+          request.executeTool &&
+          streamed.trim()
+        ) {
+          const leaked = parseLeakedToolCall(streamed, allowedToolNames);
+          if (leaked && consumeToolCall(host)) {
+            const executionId = `${request.runId}:leaked:${leaked.name}`;
+            queue.push({ type: "tool", name: leaked.name, args: leaked.args, executionId });
+            const matched = toolDefs.find((tool) => tool.name === leaked.name);
+            const result = matched?.route
+              ? await request.executeTool(leaked.name, leaked.args, executionId, matched.route)
+              : await request.executeTool(leaked.name, leaked.args, executionId);
+            streamed = summarizeToolResult(result);
+            heldLocalLeak = false;
+            queue.push({ type: "text", text: streamed || "ok" });
+          } else if (heldLocalLeak) {
+            queue.push({ type: "text", text: streamed });
+            heldLocalLeak = false;
+          }
         }
 
         // Budget abort stops the agent underneath the model, which leaves

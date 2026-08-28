@@ -1,5 +1,5 @@
 import { type JobPublisher, runContinueJob } from "@rakazo/adapter-kit";
-import { toComputerRef } from "@rakazo/adapters";
+import { toComputerRef } from "@rakazo/adapters/computer-support";
 import {
   type Actor,
   GROUP_MEMBER_MIN,
