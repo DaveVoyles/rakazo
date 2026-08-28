@@ -5441,6 +5441,11 @@ function embeddableScreenUrl(url: string | null): string | null {
   if (!url) return null;
   try {
     const parsed = new URL(url, window.location.href);
+    // WEB_ORIGIN is loopback. On Tailscale the iframe must stay on this page's
+    // host or the MBP tries 127.0.0.1 and gets a black pane.
+    if (parsed.pathname.startsWith("/novnc/")) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
     const page = new URL(window.location.href);
     const local = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost";
     const pagePort = page.port || (page.protocol === "https:" ? "443" : "80");
