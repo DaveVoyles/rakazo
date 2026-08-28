@@ -16,6 +16,30 @@ const EVENT_BATCH_SIZE = 200;
 const PUSH_CATCH_UP_MS = 30_000;
 const POLL_ONLY_CATCH_UP_MS = 400;
 
+export function durableBotBlocks(
+  blocks: MessageBlock[],
+  progressPayload: unknown,
+): MessageBlock[] {
+  const hasText = blocks.some(
+    (block) =>
+      block.kind === "text" && block.text.trim() !== "" && block.text.trim() !== "done.",
+  );
+  if (hasText) return blocks;
+  const payload =
+    progressPayload && typeof progressPayload === "object"
+      ? (progressPayload as Record<string, unknown>)
+      : null;
+  const text =
+    typeof payload?.text === "string"
+      ? payload.text
+      : typeof payload?.delta === "string"
+        ? payload.delta
+        : "";
+  if (text.trim()) return [{ kind: "text", text: text.trim() }];
+  return blocks;
+}
+
+
 export interface AppendEventInput {
   workspaceId: string;
   threadId: string;
@@ -787,22 +811,33 @@ export async function finalizeRun(
     });
     if (task.count !== 1) throw new Error("Run task was not available to finalize");
 
-    if (input.outcome === "completed") {
-      const message = await createThreadMessageInTransaction(tx, {
-        threadId: input.threadId,
-        role: "bot",
-        blocks: input.blocks,
-        botId: input.botId,
-        runId: input.runId,
+    if (input.outcome === "completed" || input.outcome === "failed") {
+      const progress = await tx.event.findFirst({
+        where: { runId: input.runId, type: "thread.progress" },
+        orderBy: { seq: "desc" },
+        select: { payload: true },
       });
-      await appendEventInTransaction(tx, {
-        workspaceId: input.workspaceId,
-        threadId: input.threadId,
-        botId: input.botId,
-        type: "thread.message.created",
-        runId: input.runId,
-        payload: { messageId: message.id, role: "bot", blocks: input.blocks },
-      });
+      const blocks = durableBotBlocks(input.blocks ?? [], progress?.payload);
+      const hasText = blocks.some(
+        (block) => block.kind === "text" && block.text.trim() !== "" && block.text.trim() !== "done.",
+      );
+      if (input.outcome === "completed" || hasText) {
+        const message = await createThreadMessageInTransaction(tx, {
+          threadId: input.threadId,
+          role: "bot",
+          blocks,
+          botId: input.botId,
+          runId: input.runId,
+        });
+        await appendEventInTransaction(tx, {
+          workspaceId: input.workspaceId,
+          threadId: input.threadId,
+          botId: input.botId,
+          type: "thread.message.created",
+          runId: input.runId,
+          payload: { messageId: message.id, role: "bot", blocks },
+        });
+      }
     }
     const lastEvent = await appendEventInTransaction(tx, {
       workspaceId: input.workspaceId,

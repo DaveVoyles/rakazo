@@ -301,7 +301,9 @@ export function reduceThreadSnapshot(
       cursor: event.seq,
       messages: hasDurable
         ? prev.messages.filter((message) => message.id !== liveId)
-        : prev.messages,
+        : prev.messages.map((message) =>
+            message.id === liveId ? { ...message, id: `kept:${event.runId}` } : message,
+          ),
       members: updateMemberStatus(prev.members, event.botId, nextMemberRun?.status ?? "idle"),
       run: prev.run?.id === event.runId ? (activeRuns?.[0] ?? null) : prev.run,
       activeRuns,

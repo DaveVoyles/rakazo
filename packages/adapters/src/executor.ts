@@ -406,6 +406,11 @@ export function runWallClockTimeoutMs(modelId: string | null | undefined): numbe
   return modelId === "qwen2.5:32b" ? 90_000 : 600_000;
 }
 
+export function toolRequiresComputerExecutionLease(name: string): boolean {
+  return IMAGE_RETURNING_COMPUTER_TOOLS.has(name);
+}
+
+
 async function markRunTimedOut(
   prisma: PrismaClient,
   runId: string,
@@ -667,23 +672,25 @@ export function createRunExecutor(deps: ExecutorDeps) {
         return;
       }
       let computerLease: ComputerExecutionLease | null = null;
-      try {
-        computerLease = await acquireComputerExecutionLease(deps.prisma, {
-          computerId: leaseTarget.computerId,
-          runId,
-          botId: run.botId,
-          resumeHeldLease: resumeFromTakeover,
-        });
-      } catch (error) {
-        if (!(error instanceof ComputerBusyError)) throw error;
-        const wallClockMs = runWallClockTimeoutMs(leaseTarget.modelId);
-        const runningSince = current.startedAt ?? new Date();
-        if (Date.now() - runningSince.getTime() >= wallClockMs) {
-          await markRunTimedOut(deps.prisma, runId, wallClockMs);
+      if (resumeFromTakeover) {
+        try {
+          computerLease = await acquireComputerExecutionLease(deps.prisma, {
+            computerId: leaseTarget.computerId,
+            runId,
+            botId: run.botId,
+            resumeHeldLease: true,
+          });
+        } catch (error) {
+          if (!(error instanceof ComputerBusyError)) throw error;
+          const wallClockMs = runWallClockTimeoutMs(leaseTarget.modelId);
+          const runningSince = current.startedAt ?? new Date();
+          if (Date.now() - runningSince.getTime() >= wallClockMs) {
+            await markRunTimedOut(deps.prisma, runId, wallClockMs);
+            return;
+          }
+          await requeueComputerRun(deps, runId, workerId, fence, resumeCheckpoint);
           return;
         }
-        await requeueComputerRun(deps, runId, workerId, fence, resumeCheckpoint);
-        return;
       }
       const attempt = await deps.prisma.attempt
         .create({
@@ -1080,6 +1087,23 @@ export function createRunExecutor(deps: ExecutorDeps) {
           if (IMAGE_RETURNING_COMPUTER_TOOLS.has(name) && !acceptsImages) {
             return { error: MODEL_CANNOT_SEE_MESSAGE };
           }
+          if (toolRequiresComputerExecutionLease(name) && !computerLease) {
+            try {
+              computerLease = await acquireComputerExecutionLease(deps.prisma, {
+                computerId: leaseTarget.computerId,
+                runId,
+                botId: run.botId,
+                resumeHeldLease: resumeFromTakeover,
+              });
+              context.screenLeaseId = screenLeaseIdForRun(computerLease, runId, fence);
+            } catch (error) {
+              if (error instanceof ComputerBusyError) {
+                return { error: "Team computer is busy with another bot. Retry in a moment." };
+              }
+              throw error;
+            }
+          }
+
           // Approval applies to the exact persisted request, never to a payload the model
           // reconstructs after the worker resumes. This also makes a changed reconstruction
           // hit the already-approved effect instead of creating a second approval card.

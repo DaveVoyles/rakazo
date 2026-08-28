@@ -120,6 +120,7 @@ describe("graphical computer spec", () => {
     expect(start).toMatch(/rakazo-computer-control/);
     expect(start).toMatch(/rakazo-browser/);
     expect(start).toMatch(/SingletonLock/);
+    expect(start).toMatch(/calendar\.google\.com/);
     expect(start).toMatch(/x11vnc .* -viewonly /);
     expect(browser).toMatch(/\.browser-profiles\/chromium/);
     expect(start).not.toMatch(/windowsize 1280 800/);

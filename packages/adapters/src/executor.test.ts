@@ -1,7 +1,7 @@
 import { ONCE_ROUTINE_CRON } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
-import { createRunExecutor, runWallClockTimeoutMs } from "./executor.js";
+import { createRunExecutor, runWallClockTimeoutMs, toolRequiresComputerExecutionLease } from "./executor.js";
 
 
 describe("runWallClockTimeoutMs", () => {
@@ -12,6 +12,18 @@ describe("runWallClockTimeoutMs", () => {
     expect(runWallClockTimeoutMs(undefined)).toBe(600_000);
   });
 });
+
+describe("toolRequiresComputerExecutionLease", () => {
+  it("locks the team computer only for screen tools", () => {
+    expect(toolRequiresComputerExecutionLease("computer_observe")).toBe(true);
+    expect(toolRequiresComputerExecutionLease("computer_act")).toBe(true);
+    expect(toolRequiresComputerExecutionLease("open_path")).toBe(true);
+    expect(toolRequiresComputerExecutionLease("launch_app")).toBe(true);
+    expect(toolRequiresComputerExecutionLease("broadcast_to_fleet")).toBe(false);
+    expect(toolRequiresComputerExecutionLease("shell")).toBe(false);
+  });
+});
+
 
 describe("createRunExecutor", () => {
   it("deactivates one-shot routines after wake without scheduling another wakeup", async () => {

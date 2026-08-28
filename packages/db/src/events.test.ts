@@ -10,6 +10,7 @@ import {
   pauseRunForInput,
   pauseRunForTakeover,
   sendUserMessage,
+  durableBotBlocks,
 } from "./events.js";
 import { RunHistoryWriteError } from "./messages.js";
 
@@ -40,6 +41,21 @@ class TestFanout implements RealtimeFanout {
 
   async close() {}
 }
+
+describe("durableBotBlocks", () => {
+  it("keeps real bot text and fills from progress when the durable blocks are empty", () => {
+    expect(
+      durableBotBlocks([{ kind: "text", text: "17s result" }], { text: "ignored" }),
+    ).toEqual([{ kind: "text", text: "17s result" }]);
+    expect(durableBotBlocks([], { text: "still working" })).toEqual([
+      { kind: "text", text: "still working" },
+    ]);
+    expect(durableBotBlocks([{ kind: "text", text: "done." }], { delta: "the real answer" })).toEqual(
+      [{ kind: "text", text: "the real answer" }],
+    );
+  });
+});
+
 
 function event(seq: number) {
   return {
