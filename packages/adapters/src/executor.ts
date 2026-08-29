@@ -1009,7 +1009,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
         };
         let autoReviewPreferencePromise: Promise<boolean> | undefined;
         const loadAutoReviewPreference = () => {
-          autoReviewPreferencePromise ??= deps.prisma.actionAutoReviewPreference
+          const delegate = deps.prisma.actionAutoReviewPreference;
+          if (!delegate) {
+            return Promise.resolve(deploymentAutoReviewDefault());
+          }
+          autoReviewPreferencePromise ??= delegate
             .findUnique({
               where: {
                 workspaceId_userId: {
