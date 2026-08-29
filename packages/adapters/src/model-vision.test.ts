@@ -20,6 +20,7 @@ describe("model vision gating for computer tools", () => {
 
   it("treats catalog vision models as able to see", () => {
     expect(modelAcceptsImageInput("openrouter", "openai/gpt-4o")).toBe(true);
+    expect(modelAcceptsImageInput("openrouter", "openai/gpt-4o-mini")).toBe(true);
     expect(modelAcceptsImageInput("openrouter", "deepseek/deepseek-v4-flash-vision-exp")).toBe(
       true,
     );
