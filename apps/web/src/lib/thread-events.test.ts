@@ -665,6 +665,48 @@ describe("thread event reduction", () => {
     expect(threadRunError(next)).toBe("member exploded");
   });
 
+  it("clears a leftover one-to-one failure when a later run completes", () => {
+    const failed = {
+      ...threadRun("run-a"),
+      status: "failed" as const,
+      error: "Invalid tx.event.create() invocation",
+    };
+    const later = threadRun("run-b");
+    const initial: ThreadSnapshot = {
+      ...snapshot([]),
+      run: failed,
+      activeRuns: [later],
+    };
+
+    const next = reduceThreadSnapshot(
+      initial,
+      event({ type: "run.completed", seq: 20, runId: later.id }),
+    );
+
+    expect(next?.run).toBeNull();
+    expect(threadRunError(next)).toBeNull();
+  });
+
+
+  it("hides a one-to-one failure once a later bot reply is on the thread", () => {
+    const failed = {
+      ...threadRun("run-a"),
+      status: "failed" as const,
+      error: "Invalid tx.event.create() invocation",
+    };
+    const later = {
+      ...message("m-later", [{ kind: "text", text: "Google Calendar" }]),
+      runId: "run-b",
+      role: "bot" as const,
+    };
+    const snap: ThreadSnapshot = {
+      ...snapshot([later]),
+      run: failed,
+    };
+    expect(threadRunError(snap)).toBeNull();
+  });
+
+
   it("clears the run and reports no error when it completes or fails without a message", () => {
     const finishing = threadRun("run-a");
     const initial: ThreadSnapshot = { ...snapshot([]), run: finishing };

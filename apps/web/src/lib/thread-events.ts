@@ -90,7 +90,19 @@ export function threadRunError(
   dismissedRunIds?: ReadonlySet<string>,
 ): string | null {
   const run = snapshot?.run;
-  if (run?.status !== "failed" || dismissedRunIds?.has(run.id)) return null;
+  if (!snapshot || run?.status !== "failed" || dismissedRunIds?.has(run.id)) return null;
+  if (
+    !snapshot.groupId &&
+    snapshot.messages.some(
+      (message) =>
+        message.role === "bot" &&
+        Boolean(message.runId) &&
+        message.runId !== run.id &&
+        !message.id.startsWith("progress:"),
+    )
+  ) {
+    return null;
+  }
   return run.error ?? null;
 }
 
@@ -326,10 +338,12 @@ export function reduceThreadSnapshot(
       members: updateMemberStatus(prev.members, event.botId, nextMemberRun?.status ?? "idle"),
       // A failed run stays in run (activeRuns already excludes it) so the transcript can say
       // why it stopped, matching what threads.get returns on the next load.
+      // One-to-one: a later successful complete must drop a leftover failure or the banner
+      // sticks under the good reply (missed run.started, or the json-create crash).
       run:
         endedRun && failure
           ? { ...endedRun, status: "failed", error: failure }
-          : primaryEnded
+          : primaryEnded || (event.type === "run.completed" && !prev.groupId)
             ? (activeRuns?.[0] ?? null)
             : prev.run,
       activeRuns,
