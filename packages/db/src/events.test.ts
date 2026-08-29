@@ -11,6 +11,7 @@ import {
   pauseRunForTakeover,
   sendUserMessage,
   durableBotBlocks,
+  toPostgresJson,
 } from "./events.js";
 import { RunHistoryWriteError } from "./messages.js";
 
@@ -1214,5 +1215,43 @@ describe("appendEvent", () => {
     ).resolves.toMatchObject({ type: "thread.progress", runId: "run-2" });
     expect(tx.event.create).toHaveBeenCalled();
     expect(publish).toHaveBeenCalled();
+  });
+
+  it("rewrites unpaired surrogates so Postgres json will accept the payload", async () => {
+    const fanout = new TestFanout();
+    const created = {
+      ...event(8),
+      type: "thread.progress",
+      runId: "run-2",
+    };
+    const tx = {
+      thread: { update: vi.fn().mockResolvedValue({ nextEventSeq: 9 }) },
+      run: { findUnique: vi.fn().mockResolvedValue({ status: "running" }) },
+      event: { create: vi.fn().mockResolvedValue(created) },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as unknown as PrismaClient;
+
+    await appendEvent(
+      prisma,
+      {
+        workspaceId: "workspace-1",
+        threadId: "thread-1",
+        botId: "bot-1",
+        type: "thread.progress",
+        runId: "run-2",
+        payload: { text: "hi \uD83D there" },
+      },
+      fanout,
+    );
+
+    expect(tx.event.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        payload: { text: "hi \uFFFD there" },
+      }),
+    });
+    expect(toPostgresJson("👍")).toBe("👍");
+    expect(toPostgresJson("\u0000ok")).toBe("ok");
   });
 });

@@ -16,6 +16,17 @@ const EVENT_BATCH_SIZE = 200;
 const PUSH_CATCH_UP_MS = 30_000;
 const POLL_ONLY_CATCH_UP_MS = 400;
 
+/** Postgres json rejects unpaired UTF-16 surrogates (`\\ud83d`) and U+0000. */
+export function toPostgresJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value, (_key, nested) => {
+    if (typeof nested !== "string") return nested;
+    return nested
+      .replaceAll("\u0000", "")
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+  })) as Prisma.InputJsonValue;
+}
+
+
 export function durableBotBlocks(
   blocks: MessageBlock[],
   progressPayload: unknown,
@@ -874,7 +885,7 @@ export async function appendEventInTransaction(
       botId: input.botId,
       seq: thread.nextEventSeq - 1,
       type: input.type,
-      payload: input.payload as Prisma.InputJsonValue,
+      payload: toPostgresJson(input.payload),
       runId: input.runId,
     },
   });
