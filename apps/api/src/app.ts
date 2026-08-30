@@ -185,6 +185,13 @@ export async function createApp(
       "http://127.0.0.1:8081",
       "http://localhost:19006",
       "http://127.0.0.1:19006",
+      // Remote access to mini-pro over the tailnet/LAN (docs/network-access.md) —
+      // better-auth checks the browser's Origin header against this list, so
+      // every documented access URL for the host needs to be trusted here.
+      "https://mini-pro.tail86a7c7.ts.net",
+      "http://100.120.183.39:5173",
+      "http://192.168.1.53:5173",
+      "http://mini-pro.local:5173",
     ],
     beforeDeleteUser: async (userId) => {
       const bots = await prisma.bot.findMany({
