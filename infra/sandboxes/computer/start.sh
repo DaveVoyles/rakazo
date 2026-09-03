@@ -56,9 +56,10 @@ if [[ "$ready" -ne 1 ]]; then
   exit 1
 fi
 
-if command -v dbus-launch >/dev/null 2>&1; then
-  eval "$(dbus-launch --sh-syntax)"
-fi
+# Do not dbus-launch a throwaway session bus. Chromium would encrypt Google
+# cookies to that bus; the next boot cannot decrypt them and Calendar shows
+# "You are logged out" on a cached grid. --password-store=basic keeps the key
+# in the bind-mounted profile.
 
 xsetroot -solid "#111113" >/dev/null 2>&1 || true
 mkdir -p /tmp/fluxbox-home/.fluxbox

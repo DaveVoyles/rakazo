@@ -151,6 +151,9 @@ describe("graphical computer spec", () => {
     expect((start.match(/rakazo-browser/g) || []).length).toBe(1);
     expect(start).toMatch(/trap cleanup TERM INT/);
     expect(start).toMatch(/exited_cleanly/);
+    expect(start).not.toMatch(/eval "\$\(dbus-launch/);
+    expect(browser).toMatch(/password-store=basic/);
+    expect(browser).toMatch(/\/usr\/lib\/chromium\/chromium/);
     expect(start).toMatch(/SingletonLock/);
     expect(start).toMatch(/calendar\.google\.com/);
     expect(start).toMatch(/x11vnc .* -viewonly /);
