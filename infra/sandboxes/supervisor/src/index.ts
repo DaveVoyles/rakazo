@@ -17,8 +17,10 @@ import {
   COMPUTER_USER,
   computerNetworkNameFor,
   computerNetworkNamesForCleanup,
+  COMPUTER_STOP_TIMEOUT_SEC,
   containerCreateOptions,
   containerNameFor,
+  stopThenRemove,
   hostComputerUser,
   legacyNetworkOwnedSolelyBy,
   resolveComputerControlEndpoint,
@@ -165,7 +167,7 @@ app.post("/computers", async (c) => {
           : hostGid;
       await assertComputerHomeWritable(serviceHomePath, effectiveUid, effectiveGid);
       if (existing) {
-        await existing.remove({ force: true }).catch(() => undefined);
+        await stopThenRemove(existing);
       }
       const name = containerNameFor(body.botId);
       const container = await docker.createContainer(
@@ -557,7 +559,7 @@ app.post("/computers/:id/stop", async (c) => {
       c.req.header("x-rakazo-bot-id"),
       c.req.header("x-rakazo-workspace-id"),
     );
-    await container.stop().catch(() => undefined);
+    await container.stop({ t: COMPUTER_STOP_TIMEOUT_SEC }).catch(() => undefined);
     clearComputerScreenRegistry(computerScreens, id);
     return c.json({ ok: true });
   } catch {
@@ -576,7 +578,7 @@ app.delete("/computers/:id", async (c) => {
         botId,
         c.req.header("x-rakazo-workspace-id"),
       );
-      await container.remove({ force: true }).catch(() => undefined);
+      await stopThenRemove(container);
       clearComputerScreenRegistry(computerScreens, id);
       if (screenNetworkMode !== "internal") {
         await removeBotNetwork(botId);

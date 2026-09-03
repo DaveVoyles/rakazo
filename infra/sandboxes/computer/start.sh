@@ -18,6 +18,30 @@ rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
 Xvfb :1 -screen 0 1280x800x24 -ac +extension RANDR +render -noreset >/tmp/rakazo/xvfb.log 2>&1 &
 XVFB_PID=$!
 
+cleanup() {
+  trap - TERM INT
+  # PID 1 ignores SIGTERM unless trapped. Without this, Docker waits then
+  # SIGKILLs Chromium (exit 137) and Google cookies never flush.
+  # TERM only the browser process (no --type=). Killing zygotes first marks Crashed.
+  for pid in $(pgrep -f '/usr/lib/chromium/chromium' 2>/dev/null || true); do
+    cmdline=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$cmdline" in
+      *--type=*) continue ;;
+    esac
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for _ in $(seq 1 36); do
+    pgrep -f '/usr/lib/chromium/chromium' >/dev/null || break
+    sleep 0.5
+  done
+  if [[ -n "${XVFB_PID:-}" ]]; then
+    kill "$XVFB_PID" 2>/dev/null || true
+    wait "$XVFB_PID" 2>/dev/null || true
+  fi
+  exit 0
+}
+trap cleanup TERM INT
+
 ready=0
 for _ in $(seq 1 100); do
   if xdpyinfo -display :1 >/dev/null 2>&1; then
@@ -49,11 +73,30 @@ EOF
 chmod +x /tmp/fluxbox-home/.fluxbox/startup
 HOME=/tmp/fluxbox-home /tmp/fluxbox-home/.fluxbox/startup >/tmp/rakazo/fluxbox.log 2>&1 &
 
-rm -f "$AGENT_HOME/.browser-profiles/chromium/SingletonLock" \
-  "$AGENT_HOME/.browser-profiles/chromium/SingletonCookie" \
-  "$AGENT_HOME/.browser-profiles/chromium/SingletonSocket"
+PROFILE="$AGENT_HOME/.browser-profiles/chromium"
+mkdir -p "$PROFILE/Default"
+rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
+# Chromium writes "Crashed" after SIGKILL. Google then shows "logged out" on a
+# still-valid cookie jar. Mark the last run clean before we start.
+python3 - "$PROFILE/Default/Preferences" <<'PY' || true
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    raise SystemExit(0)
+profile = data.setdefault("profile", {})
+profile["exit_type"] = "Normal"
+profile["exited_cleanly"] = True
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh)
+PY
 
-HOME="$AGENT_HOME" rakazo-browser >/tmp/rakazo/browser.log 2>&1 &
+# One Chromium only. A second process on the same profile fights SingletonLock
+# and can invalidate the Google session.
+HOME="$AGENT_HOME" rakazo-browser "https://calendar.google.com/calendar/u/0/r" \
+  >/tmp/rakazo/browser.log 2>&1 &
 browser_up=0
 for _ in $(seq 1 40); do
   if xdotool search --onlyvisible --class chromium >/dev/null 2>&1; then
@@ -70,11 +113,6 @@ if [[ "$browser_up" -ne 1 ]]; then
   echo "browser failed to start" >&2
   cat /tmp/rakazo/browser.log >&2 || true
   xterm -geometry 100x28+48+48 -bg "#111113" -fg "#E8E8EA" -cr "#E8E8EA" -title "Terminal" >/tmp/rakazo/xterm.log 2>&1 &
-fi
-
-if [[ "$browser_up" -eq 1 ]]; then
-  HOME="$AGENT_HOME" rakazo-browser "https://calendar.google.com/calendar/u/0/r" \
-    >/tmp/rakazo/calendar.log 2>&1 &
 fi
 
 

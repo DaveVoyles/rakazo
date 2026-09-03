@@ -4,6 +4,15 @@ export const COMPUTER_IMAGE = process.env.RAKAZO_COMPUTER_IMAGE ?? "rakazo/compu
 export const COMPUTER_UID = 1000;
 export const COMPUTER_GID = 1000;
 export const COMPUTER_USER = `${COMPUTER_UID}:${COMPUTER_GID}`;
+export const COMPUTER_STOP_TIMEOUT_SEC = 20;
+
+export async function stopThenRemove(container: {
+  stop: (opts?: { t?: number }) => Promise<unknown>;
+  remove: (opts?: { force?: boolean }) => Promise<unknown>;
+}): Promise<void> {
+  await container.stop({ t: COMPUTER_STOP_TIMEOUT_SEC }).catch(() => undefined);
+  await container.remove({ force: true }).catch(() => undefined);
+}
 export const TEAM_SCREEN_LIMIT = 8;
 export const COMPUTER_CONTROL_PORT = 7070;
 export const SCREEN_HOST = process.env.SANDBOX_SCREEN_HOST ?? "127.0.0.1";
@@ -105,6 +114,7 @@ export function containerCreateOptions(input: ComputerCreateInput) {
       PidsLimit: 2048,
       ReadonlyPaths: ["/usr/share/novnc"],
       AutoRemove: false,
+      StopTimeout: 20,
       NetworkMode: input.networkMode ?? "bridge",
     },
     WorkingDir: "/home/rakazo",

@@ -8,6 +8,8 @@ import {
   computerNetworkNamesForCleanup,
   containerCreateOptions,
   containerNameFor,
+  COMPUTER_STOP_TIMEOUT_SEC,
+  stopThenRemove,
   hostComputerUser,
   legacyNetworkOwnedSolelyBy,
   resolveComputerControlEndpoint,
@@ -69,6 +71,33 @@ describe("graphical computer spec", () => {
     expect(options.HostConfig.PidsLimit).toBe(2048);
     expect(options.HostConfig.ReadonlyPaths).toContain("/usr/share/novnc");
     expect(options.HostConfig.NetworkMode).toBe("rakazo_default");
+    expect(options.HostConfig.StopTimeout).toBe(COMPUTER_STOP_TIMEOUT_SEC);
+  });
+
+  it("stops Chromium before force-removing a computer", async () => {
+    const calls: string[] = [];
+    await stopThenRemove({
+      stop: async (opts) => {
+        calls.push(`stop:${opts?.t}`);
+      },
+      remove: async (opts) => {
+        calls.push(`remove:${Boolean(opts?.force)}`);
+      },
+    });
+    expect(calls).toEqual([`stop:${COMPUTER_STOP_TIMEOUT_SEC}`, "remove:true"]);
+  });
+
+  it("still force-removes when stop already failed", async () => {
+    const calls: string[] = [];
+    await stopThenRemove({
+      stop: async () => {
+        throw new Error("already stopped");
+      },
+      remove: async (opts) => {
+        calls.push(`remove:${Boolean(opts?.force)}`);
+      },
+    });
+    expect(calls).toEqual(["remove:true"]);
   });
 
   it("still publishes host ports when NetworkMode is a per-bot isolated network", () => {
@@ -119,6 +148,9 @@ describe("graphical computer spec", () => {
     expect(dockerfile).toMatch(/USER 1000:1000/);
     expect(start).toMatch(/rakazo-computer-control/);
     expect(start).toMatch(/rakazo-browser/);
+    expect((start.match(/rakazo-browser/g) || []).length).toBe(1);
+    expect(start).toMatch(/trap cleanup TERM INT/);
+    expect(start).toMatch(/exited_cleanly/);
     expect(start).toMatch(/SingletonLock/);
     expect(start).toMatch(/calendar\.google\.com/);
     expect(start).toMatch(/x11vnc .* -viewonly /);
