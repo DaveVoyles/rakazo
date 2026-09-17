@@ -25,7 +25,7 @@ export const GroupAvatar = memo(function GroupAvatar({
     return (
       <div
         className={cn(
-          "rakazo-group-avatar relative flex items-center justify-center rounded-full border border-[#2A2A32] bg-[#1A1A1E] text-[#9A9AA2]",
+          "rakazo-group-avatar relative flex items-center justify-center rounded-full border border-border bg-muted text-muted-foreground",
           className,
         )}
         style={{ width: size, height: size, flex: "none" }}
@@ -84,11 +84,11 @@ export const GroupAvatar = memo(function GroupAvatar({
       {visibleMembers.map((member, index) => (
         <div
           key={member.botId ?? index}
-          className="absolute rounded-full"
+          className="absolute"
           style={{
             ...positions[index],
             zIndex: index + 1,
-            boxShadow: "0 0 0 1.5px #121215",
+            filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.6))",
           }}
         >
           <BotAvatar
@@ -101,11 +101,10 @@ export const GroupAvatar = memo(function GroupAvatar({
       ))}
       {members.length > 3 ? (
         <div
-          className="absolute right-0 bottom-0 z-[3] flex items-center justify-center rounded-full bg-[#202026] text-[10px] font-semibold text-[#E0E0E6]"
+          className="absolute right-0 bottom-0 z-[3] flex items-center justify-center rounded-full bg-secondary border border-border text-[10px] font-semibold text-secondary-foreground shadow-md"
           style={{
             width: miniSize,
             height: miniSize,
-            boxShadow: "0 0 0 1.5px #121215",
           }}
         >
           {`+${members.length - 2}`}

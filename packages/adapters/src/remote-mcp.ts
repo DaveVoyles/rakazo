@@ -1,15 +1,19 @@
 import { lookup } from "node:dns/promises";
-import { isIP, type LookupFunction } from "node:net";
+import type { LookupFunction } from "node:net";
+import { isIP } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ConnectorTool } from "@rakazo/adapter-kit";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import { combineSignals } from "./connector-safety.js";
 import {
   createAddressCheckedLookup,
+  isCloudMetadataAddress,
   isPrivateAddress,
+  isTailscaleAddress,
   type ResolvedAddress,
   type ResolveHostname,
+  withPinnedDnsLookup,
 } from "./network-address.js";
 
 const MAX_MCP_TOOLS = 250;
@@ -73,7 +77,7 @@ export async function callRemoteMcpTool(
       signal,
       timeout: MCP_TIMEOUT_MS,
     });
-    return limitPayload({
+    return limitRemoteMcpPayload({
       content: result.content,
       structuredContent: result.structuredContent,
       isError: result.isError ?? false,
@@ -92,7 +96,7 @@ async function withRemoteMcpClient<T>(
   );
   const signal = combineSignals(options.signal, AbortSignal.timeout(MCP_TIMEOUT_MS));
   const safeFetch = createSafeRemoteFetch(
-    options.fetch ?? globalThis.fetch,
+    options.fetch,
     options.resolveHostname ?? resolveHostname,
   );
   const transport = new StreamableHTTPClientTransport(endpoint, {
@@ -117,6 +121,13 @@ export async function assertSafeRemoteUrl(
   value: string,
   resolve: ResolveHostname = resolveHostname,
 ): Promise<URL> {
+  return (await inspectSafeRemoteUrl(value, resolve)).url;
+}
+
+async function inspectSafeRemoteUrl(
+  value: string,
+  resolve: ResolveHostname,
+): Promise<{ url: URL; addresses: ResolvedAddress[] }> {
   let url: URL;
   try {
     url = new URL(value);
@@ -128,25 +139,55 @@ export async function assertSafeRemoteUrl(
   if (url.hash) throw new Error("Connector URL must not contain a fragment");
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
   if (isPrivateHostname(hostname)) throw new Error("Connector URL targets a private host");
-  assertPublicAddresses(await resolve(hostname));
-  return url;
+  const addresses = await resolve(hostname);
+  assertPublicAddresses(addresses, hostname);
+  return { url, addresses };
+}
+
+/** Drive the package `Agent` with that same undici's fetch. Node 22's
+ * built-in fetch is an older undici major, so handing it a package Agent as
+ * `dispatcher` throws `invalid onRequestStart` before any socket opens.
+ * Captured Node fetch is paired the same way. Injected fetches are not given
+ * that Agent; they keep the original hostname for TLS/SNI and pin TCP to the
+ * already-validated address through `dns.lookup`. */
+const packageFetch = undiciFetch as unknown as typeof globalThis.fetch;
+const nodeFetch = globalThis.fetch;
+
+function requestInitWithHost(url: URL, init: RequestInit): RequestInit {
+  const headers = new Headers(init.headers);
+  headers.set("host", url.host);
+  return { ...init, headers };
 }
 
 export function createSafeRemoteFetch(
-  baseFetch: typeof globalThis.fetch = globalThis.fetch,
+  baseFetch?: typeof globalThis.fetch,
   resolve: ResolveHostname = resolveHostname,
 ): SafeRemoteFetch {
   const dispatcher = new Agent({ connect: { lookup: createSafeLookup(resolve) } });
+  const usePackageFetch =
+    baseFetch == null || baseFetch === nodeFetch || baseFetch === packageFetch;
   const safeFetch = async (input: string | URL | Request, init?: RequestInit) => {
     if (typeof input !== "string" && !(input instanceof URL)) {
       throw new Error("Connector fetch requires a URL, not a Request");
     }
-    const url = await assertSafeRemoteUrl(String(input), resolve);
-    const response = await baseFetch(url, {
-      ...init,
-      redirect: "manual",
-      dispatcher,
-    } as RequestInit & { dispatcher: Agent });
+    const { url, addresses } = await inspectSafeRemoteUrl(String(input), resolve);
+    let response: Response;
+    try {
+      const requestInit = { ...init, redirect: "manual" as const };
+      response = usePackageFetch
+        ? await packageFetch(url, {
+            ...requestInit,
+            dispatcher,
+          } as RequestInit & { dispatcher: Agent })
+        : await withPinnedDnsLookup(url.hostname, addresses, () =>
+            baseFetch!(url, requestInitWithHost(url, requestInit)),
+          );
+    } catch (error) {
+      const detail = transportFailureDetail(error);
+      throw new Error(`Could not reach ${url.host}${detail ? `: ${detail}` : ""}`, {
+        cause: error,
+      });
+    }
     if (response.status >= 300 && response.status < 400) {
       throw new Error("Connector redirects are not allowed");
     }
@@ -157,12 +198,38 @@ export function createSafeRemoteFetch(
   return result;
 }
 
+const MAX_CAUSE_DEPTH = 5;
+
+/** undici reports refused ports, unreachable hosts, DNS misses and TLS errors
+ * alike as `TypeError: fetch failed` and keeps the actionable reason in `cause`
+ * (or in the per-address errors of a happy-eyeballs AggregateError). */
+function transportFailureDetail(error: unknown, depth = 0): string | undefined {
+  if (depth >= MAX_CAUSE_DEPTH || !(error instanceof Error)) return undefined;
+  if (error instanceof AggregateError) {
+    for (const inner of error.errors) {
+      const detail = transportFailureDetail(inner, depth + 1);
+      if (detail) return detail;
+    }
+  }
+  return (
+    transportFailureDetail(error.cause, depth + 1) ??
+    (error.message === "fetch failed" ? undefined : error.message)
+  );
+}
+
 export function createSafeLookup(resolve: ResolveHostname = resolveHostname): LookupFunction {
   return createAddressCheckedLookup(resolve, assertPublicAddresses);
 }
 
+/** Tailscale MagicDNS names (*.ts.net) are public DNS names, not private IP literals. */
+function isTailscaleMagicDnsHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  return normalized === "ts.net" || normalized.endsWith(".ts.net");
+}
+
 function isPrivateHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  if (isTailscaleMagicDnsHostname(normalized)) return false;
   return (
     normalized === "localhost" ||
     normalized.endsWith(".localhost") ||
@@ -173,17 +240,43 @@ function isPrivateHostname(hostname: string): boolean {
   );
 }
 
-function assertPublicAddresses(addresses: ResolvedAddress[]): void {
-  if (addresses.length === 0 || addresses.some((entry) => isPrivateAddress(entry.address))) {
+function assertPublicAddresses(addresses: ResolvedAddress[], hostname?: string): void {
+  if (addresses.length === 0) {
+    throw new Error("Connector URL resolves to a private address");
+  }
+  const magicDns = hostname != null && isTailscaleMagicDnsHostname(hostname);
+  if (
+    addresses.some((entry) => {
+      if (isCloudMetadataAddress(entry.address)) return true;
+      if (!isPrivateAddress(entry.address)) return false;
+      // Allow only Tailscale ranges for MagicDNS; keep other private ranges blocked.
+      return !(magicDns && isTailscaleAddress(entry.address));
+    })
+  ) {
     throw new Error("Connector URL resolves to a private address");
   }
 }
 
-function limitPayload(value: unknown): unknown {
+export function limitRemoteMcpPayload(value: unknown): unknown {
   const serialized = JSON.stringify(value);
-  if (serialized.length <= MAX_RESULT_BYTES) return value;
+  if (serialized === undefined) return value;
+  const bytes = Buffer.from(serialized, "utf8");
+  if (bytes.byteLength <= MAX_RESULT_BYTES) return value;
   return {
     truncated: true,
-    content: serialized.slice(0, MAX_RESULT_BYTES),
+    content: decodeUtf8Prefix(bytes, MAX_RESULT_BYTES),
   };
+}
+
+function decodeUtf8Prefix(bytes: Uint8Array, maxBytes: number): string {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let end = Math.min(bytes.byteLength, maxBytes);
+  while (end > 0) {
+    try {
+      return decoder.decode(bytes.subarray(0, end));
+    } catch {
+      end -= 1;
+    }
+  }
+  return "";
 }
