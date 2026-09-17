@@ -75,7 +75,7 @@ describe("unattendedTriggerToolRequiresApproval", () => {
     }
   });
 
-  it("allows webhook-triggered reads to stay unattended", () => {
+  it("allows webhook-triggered reads and safe internal coordination to stay unattended", () => {
     for (const name of [
       "computer_observe",
       "read_file",
@@ -83,10 +83,27 @@ describe("unattendedTriggerToolRequiresApproval", () => {
       "browser_snapshot",
       "request_takeover",
       "run_subagent",
+      "scratchpad_update",
+      "message_user",
+      "message_bot",
+      "handoff_to_bot",
     ]) {
       expect(unattendedTriggerToolRequiresApproval("webhook", name, false)).toBe(false);
     }
     expect(unattendedTriggerToolRequiresApproval("webhook", "github_get_issue", true)).toBe(false);
+  });
+
+  it("allows all webhook-triggered tools when autoApproveWebhooks is enabled", () => {
+    for (const name of ["shell", "write_file", "browser_act", "computer_act"]) {
+      expect(
+        unattendedTriggerToolRequiresApproval("webhook", name, false, { autoApproveWebhooks: true }),
+      ).toBe(false);
+    }
+    expect(
+      unattendedTriggerToolRequiresApproval("webhook", "github_create_issue", true, {
+        autoApproveWebhooks: true,
+      }),
+    ).toBe(false);
   });
 
   it("forces approval for webhook-triggered connector writes regardless of normal rules", () => {

@@ -148,6 +148,9 @@ function fixture({
     actionApprovalRule: { findMany: vi.fn(async () => rules) },
     actionAutoReviewPreference: { findUnique: vi.fn(async () => ({ enabled: autoReview })) },
     externalEffect,
+    agentHome: { updateMany: vi.fn(async () => ({ count: 1 })) },
+    computer: { updateMany: vi.fn(async () => ({ count: 1 })) },
+    computerExecutionLease: { updateMany: vi.fn(async () => ({ count: 1 })) },
   };
   const pauseRunForInput = vi.fn(async () => {
     run.status = "waiting_input";
@@ -189,7 +192,15 @@ function fixture({
         catalog ? resolveCatalogCall(call, catalogEntries([tool])) : undefined,
       execute,
     },
-    sandbox: { describe: () => ({ capabilities: { graphical: false } }) },
+    sandbox: {
+      describe: () => ({ capabilities: { graphical: false } }),
+      execute: vi.fn(async function* () {
+        yield { type: "exit", exitCode: 0 };
+      }),
+      writeFile: vi.fn(async () => undefined),
+      exportWorkspace: vi.fn(async function* () {}),
+    },
+    home: { commit: vi.fn(async () => undefined) },
     memory: { read: async () => ({ documents: [] }) },
     memoryProviders: { resolve: async () => null },
     events: { append: vi.fn(async () => undefined), pauseRunForInput, finalizeRun },
@@ -231,6 +242,23 @@ describe("connector read-only metadata and approval enforcement", () => {
       expect(f.pauseRunForInput).toHaveBeenCalledOnce();
       expect(isApprovalPausedResult(f.results[0])).toBe(true);
       expect(runAutoReviewJudge).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["shell", "write_file"])(
+    "allows webhook-triggered %s when AUTO_APPROVE_WEBHOOK_ACTIONS is enabled",
+    async (name) => {
+      process.env.AUTO_APPROVE_WEBHOOK_ACTIONS = "true";
+      try {
+        const f = fixture({
+          name,
+          trigger: "webhook",
+          rules: [{ effect: "always_allow", matchKind: "tool", matchValue: name }],
+        });
+        await f.run();
+        expect(f.pauseRunForInput).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.AUTO_APPROVE_WEBHOOK_ACTIONS;
+      }
     },
   );
 

@@ -39,14 +39,18 @@ const UNATTENDED_SAFE_BUILTIN_TOOLS = new Set([
   "browser_snapshot",
   "cloud_agent_status",
   "computer_observe",
+  "handoff_to_bot",
   "list_files",
   "list_secrets",
+  "message_bot",
+  "message_user",
   "read_file",
   "recall_memory",
   "request_takeover",
   "run_subagent",
   "schedule_list",
   "scratchpad_list",
+  "scratchpad_update",
   "skill_read",
   "web_fetch",
   "web_search",
@@ -100,8 +104,10 @@ export function unattendedTriggerToolRequiresApproval(
   trigger: string,
   toolName: string,
   viaConnector: boolean,
+  options?: { autoApproveWebhooks?: boolean },
 ): boolean {
   if (trigger !== "webhook") return false;
+  if (options?.autoApproveWebhooks) return false;
   return viaConnector
     ? connectorToolRequiresApproval(toolName)
     : !UNATTENDED_SAFE_BUILTIN_TOOLS.has(toolName);

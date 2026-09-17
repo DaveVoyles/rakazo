@@ -1966,10 +1966,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
             }
           }
           const viaConnector = !BUILTIN_AGENT_TOOL_NAMES.has(name);
+          const autoApproveWebhooks =
+            process.env.AUTO_APPROVE_WEBHOOK_ACTIONS === "true" ||
+            process.env.AUTO_APPROVE_WEBHOOK_ACTIONS === "1";
           const requiresUnattendedApproval = unattendedTriggerToolRequiresApproval(
             run.trigger,
             name,
             viaConnector,
+            { autoApproveWebhooks },
           );
           const requiresApprovalByDefault =
             requiresUnattendedApproval || toolRequiresApproval(name, viaConnector);

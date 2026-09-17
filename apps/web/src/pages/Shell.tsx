@@ -2881,7 +2881,7 @@ export function ShellPage() {
                                   {item.chat.name}
                                 </span>
                                 {item.kind === "bot" && item.chat.title ? (
-                                  <span className="max-w-[130px] shrink-0 truncate rounded-md border border-border bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">
+                                  <span className="max-w-[90px] shrink truncate rounded-md border border-border bg-muted px-1.5 py-0.5 text-[10.5px] font-normal text-muted-foreground">
                                     {item.chat.title}
                                   </span>
                                 ) : null}
