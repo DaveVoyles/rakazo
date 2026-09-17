@@ -42,6 +42,11 @@ describe("truncateSlashDescription", () => {
 describe("SLASH_ACTIONS", () => {
   it("exposes chat and account destinations", () => {
     expect(SLASH_ACTIONS.map((action) => action.id)).toEqual([
+      "action-build",
+      "action-work",
+      "action-review",
+      "action-status",
+      "action-doctor",
       "chat-settings",
       "settings-general",
       "settings-usage",

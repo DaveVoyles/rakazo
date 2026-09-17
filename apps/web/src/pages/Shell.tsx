@@ -4893,8 +4893,33 @@ const Composer = memo(function Composer({
   }
 
   function runSlashAction(action: SlashActionId) {
-    setDraft("");
     setSlashQuery(null);
+    if (action === "action-build") {
+      setDraft("build: ");
+      focusComposer();
+      return;
+    }
+    if (action === "action-work") {
+      setDraft("work #");
+      focusComposer();
+      return;
+    }
+    if (action === "action-review") {
+      setDraft("review #");
+      focusComposer();
+      return;
+    }
+    if (action === "action-status") {
+      setDraft("status #");
+      focusComposer();
+      return;
+    }
+    if (action === "action-doctor") {
+      setDraft("doctor");
+      focusComposer();
+      return;
+    }
+    setDraft("");
     onSlashAction?.(action);
   }
 
