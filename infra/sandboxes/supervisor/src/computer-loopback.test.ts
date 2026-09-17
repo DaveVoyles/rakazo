@@ -210,6 +210,7 @@ describe("computer loopback provision lifecycle", () => {
       id: "existing",
       inspect: vi.fn().mockResolvedValue(info),
       start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
       remove: vi.fn().mockResolvedValue(undefined),
     };
     const replacement = {
@@ -673,6 +674,7 @@ describe("space computer limit enforcement", () => {
         },
       }),
       start: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
       remove: vi.fn(async () => {
         await new Promise((resolve) => setTimeout(resolve, 40));
         present.delete("existing-incompatible");

@@ -150,7 +150,7 @@ describe("Docker sandbox", () => {
   });
 
   it("observes without the screen lease so a user takeover can still be screenshot", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json({
         image: Buffer.from("png").toString("base64"),
         mimeType: "image/png",

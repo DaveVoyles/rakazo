@@ -187,7 +187,7 @@ describe("graphical computer spec", () => {
     expect(start).toMatch(/rakazo-computer-control/);
     expect(start).toMatch(/rakazo-browser/);
     expect(start).toMatch(/trap cleanup TERM INT/);
-    expect(start).toMatch(/exited_cleanly/);
+    expect(browser).toMatch(/exited_cleanly/);
     expect(start).not.toMatch(/eval "\$\(dbus-launch/);
     expect(browser).toMatch(/password-store=basic/);
     expect(browser).toMatch(/\/usr\/lib\/chromium\/chromium/);

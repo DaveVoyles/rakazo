@@ -106,7 +106,11 @@ describe("finalizeRun", () => {
       attempt: { updateMany: vi.fn(async () => ({ count: 1 })) },
       task: { updateMany: vi.fn(async () => ({ count: 1 })) },
       thread: { update: vi.fn(async () => ({ nextEventSeq: 1 })) },
-      event: { create: createEvent, deleteMany: vi.fn(async () => ({ count: 0 })) },
+      event: {
+        create: createEvent,
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        findFirst: vi.fn(async () => null),
+      },
       steeringMessage: {
         findMany: vi.fn(async () => []),
         updateMany: vi.fn(async () => ({ count: 0 })),
