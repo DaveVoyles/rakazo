@@ -75,24 +75,10 @@ chmod +x /tmp/fluxbox-home/.fluxbox/startup
 HOME=/tmp/fluxbox-home /tmp/fluxbox-home/.fluxbox/startup >/tmp/rakazo/fluxbox.log 2>&1 &
 
 PROFILE="$AGENT_HOME/.browser-profiles/chromium"
-mkdir -p "$PROFILE/Default"
+# rakazo-browser clears any stale "Crashed" exit_type on launch; only the
+# Singleton* files (block a second process on the same profile) need removal
+# here, before the one browser process we start below.
 rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
-# Chromium writes "Crashed" after SIGKILL. Google then shows "logged out" on a
-# still-valid cookie jar. Mark the last run clean before we start.
-python3 - "$PROFILE/Default/Preferences" <<'PY' || true
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
-except Exception:
-    raise SystemExit(0)
-profile = data.setdefault("profile", {})
-profile["exit_type"] = "Normal"
-profile["exited_cleanly"] = True
-with open(path, "w", encoding="utf-8") as fh:
-    json.dump(data, fh)
-PY
 
 # One Chromium only. A second process on the same profile fights SingletonLock
 # and can invalidate the Google session.
@@ -116,6 +102,23 @@ if [[ "$browser_up" -ne 1 ]]; then
   xterm -geometry 100x28+48+48 -bg "#111113" -fg "#E8E8EA" -cr "#E8E8EA" -title "Terminal" >/tmp/rakazo/xterm.log 2>&1 &
 fi
 
+register_browser_handler() {
+  local mime="$1"
+  if ! xdg-mime default rakazo-browser.desktop "$mime" >/dev/null 2>&1 \
+    || [[ "$(xdg-mime query default "$mime" 2>/dev/null || true)" != "rakazo-browser.desktop" ]]; then
+    echo "failed to register rakazo-browser for $mime" >&2
+    exit 1
+  fi
+}
+register_browser_handler x-scheme-handler/http
+register_browser_handler x-scheme-handler/https
+register_browser_handler text/html
+if ! xdg-settings set default-web-browser rakazo-browser.desktop >/dev/null 2>&1 \
+  || [[ "$(xdg-settings get default-web-browser 2>/dev/null || true)" != "rakazo-browser.desktop" ]]; then
+  echo "failed to set default web browser to rakazo-browser" >&2
+  exit 1
+fi
+
 
 x11vnc -display :1 -forever -shared -viewonly -nopw -listen 127.0.0.1 -rfbport 5900 -xkb -ncache 0 >/tmp/rakazo/x11vnc.log 2>&1 &
 
@@ -132,7 +135,11 @@ if [[ ! -f "$NOVNC_ROOT/clipboard-bridge.js" ]]; then
   echo "noVNC clipboard-bridge.js is missing from the computer image" >&2
   exit 1
 fi
-websockify --heartbeat=30 --web="$NOVNC_ROOT" 0.0.0.0:6080 127.0.0.1:5900 >/tmp/rakazo/novnc.log 2>&1 &
+if [[ ! -f "$NOVNC_ROOT/mobile-keyboard.js" ]]; then
+  echo "noVNC mobile-keyboard.js is missing from the computer image" >&2
+  exit 1
+fi
+websockify --heartbeat=30 --web="$NOVNC_ROOT" --token-plugin=TokenFile --token-source=/tmp/rakazo/view-target-1 0.0.0.0:6080 >/tmp/rakazo/novnc.log 2>&1 &
 
 while kill -0 "$XVFB_PID" 2>/dev/null; do
   sleep 2

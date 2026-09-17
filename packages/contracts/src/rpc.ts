@@ -1,9 +1,12 @@
 import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
+import { AiConsentQuerySchema, AiConsentStatusSchema } from "./ai-consent.js";
 import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachments.js";
 import {
   ActionApprovalRuleSchema,
   ActionAutoReviewSettingsSchema,
+  AgentSecretInputSchema,
+  AgentSecretSchema,
   AgentSkillCatalogEntrySchema,
   AgentSkillSchema,
   AppBootstrapSchema,
@@ -17,6 +20,7 @@ import {
   ComputerModeSchema,
   ComputerReleaseReasonSchema,
   ComputerStatusSchema,
+  ComputerUpdateSchema,
   ConnectionCatalogItemSchema,
   ConnectionSchema,
   CreateAgentSkillInput,
@@ -26,17 +30,25 @@ import {
   CreateScratchpadItemInput,
   DeploymentSettingsSchema,
   ExportManifestSchema,
+  ExternalConversationPolicySchema,
   GroupDetailSchema,
   GroupSchema,
+  IntegrationCatalogResultSchema,
   McpServerConfigInput,
   McpServerSchema,
   MemoryDocumentSchema,
   MemoryScopeSchema,
   MeSchema,
+  MessagingAgentConnectionSchema,
+  MessagingChannelMembershipSchema,
+  MessagingLinkedIdentitySchema,
+  MessagingStatusSchema,
   ModelCatalogEntrySchema,
   ModelConnectInputSchema,
   ModelCredentialSchema,
   ModelOAuthBeginSchema,
+  REPLY_QUOTE_MAX_LENGTH,
+  ReorderBotsInput,
   RoutineSchema,
   ScratchpadItemSchema,
   ScratchpadItemStatusSchema,
@@ -45,22 +57,30 @@ import {
   ServerUpdateRunSchema,
   ServerUpdateStatusSchema,
   SkillPlaybookSchema,
+  SpaceMemoryConfigSchema,
+  SpaceNavigationSchema,
+  SpaceSchema,
   TaughtSkillSchema,
   TeachRecordingEventSchema,
   ThreadMessagePageSchema,
   ThreadSnapshotSchema,
   UpdateAgentSkillInput,
   UpdateBotInput,
+  UpdateExternalConversationPolicyInput,
   UpdateGroupInput,
   UsageRecordSchema,
   VoiceCatalogEntrySchema,
   VoiceCredentialSchema,
   VoiceInfoSchema,
   VoiceStatusSchema,
-  WorkspaceMemoryConfigSchema,
 } from "./domain.js";
 import { ProductEventSchema } from "./events.js";
 import { Id, IsoDate } from "./ids.js";
+import {
+  IntegrationProviderConfigSchema,
+  IntegrationSetupStateSchema,
+} from "./integration-settings.js";
+import { MessageReactionSchema } from "./reactions.js";
 import { RunsListOutputSchema } from "./runs.js";
 import { SearchQueryOutputSchema } from "./search.js";
 
@@ -101,6 +121,7 @@ const threadSendInput = threadTarget
       .max(64)
       .optional(),
     replyToMessageId: Id.optional(),
+    replyQuote: z.string().trim().min(1).max(REPLY_QUOTE_MAX_LENGTH).optional(),
     clientNonce: z.string().min(1).max(200).optional(),
   })
   .superRefine((input, ctx) => {
@@ -113,13 +134,40 @@ const threadSendInput = threadTarget
         path: ["text"],
       });
     }
+    if (input.replyQuote && !input.replyToMessageId) {
+      ctx.addIssue({
+        code: "custom",
+        message: "replyQuote requires replyToMessageId",
+        path: ["replyQuote"],
+      });
+    }
   });
 
 export const appContract = {
+  aiConsent: {
+    status: oc.input(AiConsentQuerySchema).output(AiConsentStatusSchema),
+    allow: oc
+      .input(
+        z.object({
+          scope: z.string(),
+          version: z.string(),
+          keys: z.array(z.string()).min(1).max(200),
+        }),
+      )
+      .output(AiConsentStatusSchema),
+    revoke: oc.input(z.object({ key: z.string().nullable() })).output(AiConsentStatusSchema),
+  },
   health: oc.output(z.object({ ok: z.literal(true), version: z.string() })),
   me: oc.output(MeSchema),
   preferences: {
     update: oc.input(z.object({ avatarStyle: AvatarStyleSchema })).output(MeSchema),
+  },
+  spaces: {
+    list: oc.output(SpaceNavigationSchema),
+    create: oc.input(z.object({ name: z.string().trim().min(1).max(60) })).output(SpaceSchema),
+    remove: oc
+      .input(z.object({ spaceId: Id }))
+      .output(z.object({ ok: z.literal(true), activeSpaceId: Id })),
   },
   bootstrap: oc.input(z.object({ botId: Id.optional() })).output(AppBootstrapSchema),
   deployment: {
@@ -191,6 +239,7 @@ export const appContract = {
     get: oc.input(botId).output(BotSchema),
     create: oc.input(CreateBotInput).output(BotSchema),
     duplicate: oc.input(botId).output(BotSchema),
+    reorder: oc.input(ReorderBotsInput).output(z.object({ ok: z.literal(true) })),
     update: oc.input(UpdateBotInput).output(BotSchema),
     setComputer: oc.input(z.object({ botId: Id, mode: ComputerModeSchema })).output(BotSchema),
     archive: oc.input(botId).output(z.object({ ok: z.literal(true) })),
@@ -222,13 +271,24 @@ export const appContract = {
     create: oc
       .input(threadTarget.safeExtend({ name: z.string().trim().min(1).max(60) }))
       .output(BotSectionSchema),
+    update: oc
+      .input(z.object({ sectionId: Id, name: z.string().trim().min(1).max(60) }))
+      .output(BotSectionSchema),
   },
   threads: {
+    head: oc.input(threadTarget).output(
+      z.object({
+        threadId: Id,
+        cursor: z.number().int().min(-1),
+      }),
+    ),
     get: oc.input(threadTarget).output(ThreadSnapshotSchema),
     messages: oc
       .input(
         threadTarget.safeExtend({
           before: z.number().int().nonnegative().optional(),
+          includePeerRuns: z.boolean().optional(),
+          includePeerReceipts: z.boolean().optional(),
           around: z
             .object({
               messageId: Id.optional(),
@@ -249,6 +309,15 @@ export const appContract = {
         runIds: z.array(Id).optional(),
       }),
     ),
+    react: oc
+      .input(
+        threadTarget.safeExtend({
+          messageId: Id,
+          reaction: MessageReactionSchema,
+          clientNonce: z.string().min(1).max(200),
+        }),
+      )
+      .output(z.object({ ok: z.literal(true) })),
     stop: oc.input(threadTarget).output(z.object({ ok: z.literal(true) })),
     followUp: oc
       .input(threadTarget.safeExtend({ text: z.string().min(1) }))
@@ -270,9 +339,14 @@ export const appContract = {
     status: oc.input(botId).output(ComputerStatusSchema),
     boot: oc.input(botId).output(ComputerStatusSchema),
     stop: oc.input(botId).output(ComputerStatusSchema),
-    recover: oc.input(botId).output(ComputerStatusSchema),
+    recover: oc.input(botId).output(ComputerUpdateSchema),
     reset: oc.input(botId).output(ComputerStatusSchema),
-    update: oc.input(botId).output(ComputerStatusSchema),
+    update: oc.input(botId).output(ComputerUpdateSchema),
+    updates: oc.output(z.array(ComputerUpdateSchema)),
+    releaseInterrupted: oc
+      .input(z.object({ id: Id, workersStopped: z.literal(true) }))
+      .output(z.object({ ok: z.literal(true) })),
+    dismissUpdate: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
     takeover: oc.input(botId).output(z.object({ leaseId: Id, expiresAt: z.string() })),
     release: oc
       .input(
@@ -310,7 +384,7 @@ export const appContract = {
       .input(z.object({ documentId: Id, content: z.string() }))
       .output(MemoryDocumentSchema),
     exportMarkdown: oc.input(z.object({ botId: Id.optional() })).output(z.string()),
-    providerConfig: oc.output(WorkspaceMemoryConfigSchema.nullable()),
+    providerConfig: oc.output(SpaceMemoryConfigSchema.nullable()),
     connectProvider: oc
       .input(
         z.object({
@@ -320,10 +394,10 @@ export const appContract = {
           defaultMemoryScope: MemoryScopeSchema.default("isolated"),
         }),
       )
-      .output(WorkspaceMemoryConfigSchema),
+      .output(SpaceMemoryConfigSchema),
     setDefaultScope: oc
       .input(z.object({ defaultMemoryScope: MemoryScopeSchema }))
-      .output(WorkspaceMemoryConfigSchema),
+      .output(SpaceMemoryConfigSchema),
     disconnectProvider: oc.output(z.object({ ok: z.literal(true) })),
   },
   routines: {
@@ -341,14 +415,28 @@ export const appContract = {
             active: z.boolean().optional(),
             notify: z.boolean().optional(),
             webhookEnabled: z.boolean().optional(),
+            githubEnabled: z.boolean().optional(),
+            messageProvider: z
+              .string()
+              .min(1)
+              .max(50)
+              .regex(/^[a-z0-9._-]+$/i)
+              .nullable()
+              .optional(),
             /** ISO datetime to arm a never-run one-shot. */
             runAt: IsoDate.optional(),
           })
           .superRefine((value, ctx) => {
-            if (value.crons && value.crons.length === 0 && value.webhookEnabled === false) {
+            if (
+              value.crons &&
+              value.crons.length === 0 &&
+              value.webhookEnabled === false &&
+              value.githubEnabled === false &&
+              value.messageProvider === null
+            ) {
               ctx.addIssue({
                 code: "custom",
-                message: "Add a schedule or webhook trigger",
+                message: "Add a schedule, webhook, GitHub, or message trigger",
                 path: ["crons"],
               });
             }
@@ -440,10 +528,23 @@ export const appContract = {
   },
   capabilities: {
     list: oc.output(z.array(CapabilityInstallSchema)),
+    catalogSearch: oc
+      .input(
+        z.object({
+          query: z.string().trim().max(253).default(""),
+          usePublicCatalog: z.boolean().default(false),
+        }),
+      )
+      .output(
+        z.object({
+          enabled: z.boolean(),
+          results: z.array(IntegrationCatalogResultSchema),
+        }),
+      ),
     install: oc
       .input(
         z.object({
-          kind: z.enum(["skill", "plugin", "mcp", "api"]),
+          kind: z.enum(["skill", "plugin", "mcp", "api", "graphql"]),
           name: z.string().min(1).max(120),
           source: z.string().min(1).max(2048),
           config: z.record(z.string(), z.unknown()).default({}),
@@ -457,7 +558,14 @@ export const appContract = {
     servers: {
       list: oc.output(z.array(McpServerSchema)),
       create: oc.input(McpServerConfigInput).output(McpServerSchema),
-      update: oc.input(z.object({ id: Id, config: McpServerConfigInput })).output(McpServerSchema),
+      update: oc
+        .input(
+          z.union([
+            z.object({ id: Id, config: McpServerConfigInput }),
+            z.object({ id: Id, secret: z.string().min(1).max(16384) }),
+          ]),
+        )
+        .output(McpServerSchema),
       remove: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
     },
     assignments: {
@@ -499,16 +607,26 @@ export const appContract = {
     },
   },
   onboarding: {
-    /** Seed the first-run conversational onboarding into the bot's thread. */
+    /** Seed the first-run greeting into the bot's thread (focus card is separate). */
     start: oc.input(z.object({ botId: Id })).output(z.object({ ok: z.literal(true) })),
-    /** Answer the focus choice; renames the bot and posts the app cards. */
+    /** Post the focus choice card when the thread is still idle. */
+    promptFocus: oc.input(z.object({ botId: Id })).output(z.object({ ok: z.literal(true) })),
+    /** Answer the focus choice; posts the app cards. Does not rename the bot. */
     choose: oc
       .input(z.object({ botId: Id, optionId: z.string() }))
       .output(z.object({ ok: z.literal(true) })),
+    /** Dismiss the unanswered focus card without choosing an option. */
+    dismissFocus: oc.input(z.object({ botId: Id })).output(z.object({ ok: z.literal(true) })),
     /** Flip an app_connect card to connected after authorization completes. */
     appConnected: oc
-      .input(z.object({ botId: Id, provider: z.string() }))
+      .input(
+        z.object({ botId: Id, provider: z.string(), connectorId: z.string().default("composio") }),
+      )
       .output(z.object({ ok: z.literal(true) })),
+  },
+  integrationSetup: {
+    get: oc.output(IntegrationSetupStateSchema),
+    save: oc.input(IntegrationProviderConfigSchema).output(z.object({ ok: z.literal(true) })),
   },
   connections: {
     catalog: oc
@@ -527,7 +645,51 @@ export const appContract = {
     complete: oc
       .input(z.object({ connectionId: Id, code: z.string().optional() }))
       .output(ConnectionSchema),
+    rename: oc
+      .input(z.object({ connectionId: Id, displayName: z.string().trim().min(1).max(80) }))
+      .output(ConnectionSchema),
     revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
+    /** Tools the connected provider exposes. Read-only; no per-tool allowlist yet. */
+    tools: oc.input(z.object({ connectorId: z.string(), provider: z.string() })).output(
+      z.array(
+        z.object({
+          name: z.string(),
+          description: z.string(),
+        }),
+      ),
+    ),
+  },
+  /** External messaging surface: link state, group channels, agent connections. */
+  messaging: {
+    status: oc.output(MessagingStatusSchema),
+    link: {
+      /** Issue a short-lived code the user sends to the line from a chat app. */
+      start: oc
+        .input(z.object({ botId: Id }))
+        .output(z.object({ code: z.string(), expiresAt: z.string() })),
+    },
+    identities: {
+      setBot: oc
+        .input(z.object({ identityId: Id, botId: Id }))
+        .output(MessagingLinkedIdentitySchema),
+      unlink: oc.input(z.object({ identityId: Id })).output(z.object({ ok: z.literal(true) })),
+    },
+    channels: {
+      list: oc.output(z.array(MessagingChannelMembershipSchema)),
+      // Addressed by membership, not channel: one user can have two linked
+      // chat apps in the same group, and each answers for its own agent.
+      respond: oc
+        .input(z.object({ membershipId: Id, accept: z.boolean() }))
+        .output(MessagingChannelMembershipSchema),
+      leave: oc.input(z.object({ membershipId: Id })).output(z.object({ ok: z.literal(true) })),
+    },
+    connections: {
+      list: oc.output(z.array(MessagingAgentConnectionSchema)),
+      respond: oc
+        .input(z.object({ connectionId: Id, accept: z.boolean() }))
+        .output(MessagingAgentConnectionSchema),
+      revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
+    },
   },
   approvalRules: {
     list: oc.output(z.array(ActionApprovalRuleSchema)),
@@ -578,6 +740,7 @@ export const appContract = {
     registerPush: oc
       .input(z.object({ token: z.string().min(8).max(512) }))
       .output(z.object({ ok: z.literal(true) })),
+    unregisterPush: oc.output(z.object({ ok: z.literal(true) })),
   },
   search: {
     query: oc.input(z.object({ q: z.string().max(200) })).output(SearchQueryOutputSchema),
@@ -613,6 +776,16 @@ export const appContract = {
         }),
       )
       .output(z.object({ ready: z.boolean(), utterances: z.array(z.string()) })),
+  },
+  externalConversations: {
+    updatePolicy: oc
+      .input(UpdateExternalConversationPolicyInput)
+      .output(ExternalConversationPolicySchema),
+  },
+  agentSecrets: {
+    list: oc.output(z.array(AgentSecretSchema)),
+    put: oc.input(AgentSecretInputSchema).output(AgentSecretSchema),
+    remove: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
   },
 };
 

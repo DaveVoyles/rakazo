@@ -1,14 +1,54 @@
 import type { MessageBlock } from "@rakazo/contracts";
 import type { Prisma, PrismaClient } from "./client.js";
 
+/** Group turns use channel inputs and their own outputs, never private thread history. */
+export function loadRunHistoryMessages(
+  prisma: PrismaClient,
+  run: { id: string; threadId: string },
+  limit: number,
+  channelId?: string,
+) {
+  return prisma.message.findMany({
+    where: {
+      threadId: run.threadId,
+      ...(channelId
+        ? {
+            OR: [
+              {
+                role: "user",
+                blocks: { array_contains: [{ kind: "channel_message", channelId }] },
+              },
+              { role: "bot", runId: run.id },
+            ],
+          }
+        : {}),
+    },
+    orderBy: { seq: "desc" },
+    take: limit,
+    select: {
+      id: true,
+      threadId: true,
+      seq: true,
+      role: true,
+      runId: true,
+      blocks: true,
+      replyToMessageId: true,
+      replyQuote: true,
+      replyTo: { select: { id: true, threadId: true, role: true, blocks: true } },
+    },
+  });
+}
+
 export interface CreateThreadMessageInput {
   threadId: string;
   role: "user" | "bot" | "system";
   blocks: MessageBlock[];
   botId?: string;
   replyToMessageId?: string;
+  replyQuote?: string;
   runId?: string;
   clientNonce?: string;
+  markUnread?: boolean;
 }
 
 export async function createThreadMessage(prisma: PrismaClient, input: CreateThreadMessageInput) {
@@ -25,7 +65,7 @@ export async function createThreadMessageInTransaction(
     where: { id: input.threadId },
     data: {
       nextMessageSeq: { increment: 1 },
-      unread: input.role === "bot" ? true : undefined,
+      unread: (input.markUnread ?? input.role === "bot") ? true : undefined,
     },
     select: { nextMessageSeq: true },
   });
@@ -38,6 +78,7 @@ export async function createThreadMessageInTransaction(
       blocks: input.blocks as Prisma.InputJsonValue,
       botId: input.botId,
       replyToMessageId: input.replyToMessageId,
+      replyQuote: input.replyQuote,
       runId: input.runId,
       clientNonce: input.clientNonce,
     },
@@ -54,13 +95,14 @@ export class RunHistoryWriteError extends Error {
 export async function assertRunCanWriteHistory(
   tx: Prisma.TransactionClient,
   runId?: string,
-): Promise<void> {
+): Promise<{ status: string; startedAt: Date | null } | undefined> {
   if (!runId) return;
   const run = await tx.run.findUnique({
     where: { id: runId },
-    select: { status: true },
+    select: { status: true, startedAt: true },
   });
   if (!run || run.status === "cancelled") {
     throw new RunHistoryWriteError();
   }
+  return run;
 }

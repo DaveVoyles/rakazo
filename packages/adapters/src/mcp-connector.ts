@@ -7,12 +7,24 @@ import type {
 } from "@rakazo/adapter-kit";
 import { isLocalMcpHost } from "@rakazo/contracts";
 import type { McpServer, PrismaClient } from "@rakazo/db";
+import { getLogger } from "@rakazo/logging";
+import { redactConnectorPayload, sanitizeConnectorError } from "./connector-safety.js";
+import {
+  CATALOG_EXECUTE,
+  catalogEntries,
+  DIRECT_TOOL_LIMIT,
+  executeLazyCatalogControl,
+  isLazyCatalogControlRoute,
+  lazyCatalogTools,
+  resolveCatalogCall,
+} from "./lazy-tool-catalog.js";
 import type { McpOAuthBroker, OAuthMaterial } from "./mcp-oauth.js";
+import { oauthMaterialSecrets } from "./mcp-oauth.js";
 import { McpSession } from "./mcp-transport.js";
 import type { RemoteTransportDependencies } from "./remote-mcp.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
-type SessionEntry = { session: McpSession; revision: number };
+type SessionEntry = { session: McpSession; revision: number; material: OAuthMaterial };
 type PendingSession = { revision: number; promise: Promise<McpSession> };
 
 /** Runtime MCP connector. Authorization is re-checked against the bot assignment on every call. */
@@ -38,15 +50,15 @@ export function allowlistDrift(
 function reportAllowlistDrift(
   assignment: { allowAllTools: boolean; allowedTools: unknown; server: { slug: string } },
   offered: Array<{ name: string }>,
-  context: { workspaceId: string; botId?: string },
+  context: { spaceId: string; botId?: string },
 ): void {
   if (assignment.allowAllTools) return;
   const drift = allowlistDrift(assignment.allowedTools, offered);
   if (drift.missing.length === 0) return;
-  console.warn(
+  getLogger().warn(
     `mcp allowlist drift on ${assignment.server.slug}: ${drift.missing.length}/${drift.stringAllowedCount} allowed tools are not offered (server offers ${drift.offered})`,
     {
-      workspaceId: context.workspaceId,
+      spaceId: context.spaceId,
       botId: context.botId,
       // Cap the list: the point is to name the drift, not to print an allowlist.
       missing: drift.missing.slice(0, 10),
@@ -78,11 +90,26 @@ export class McpConnector implements ConnectorProvider {
   }
 
   async discoverTools(context: AdapterContext): Promise<ConnectorTool[]> {
+    const tools = await this.authorizedTools(context);
+    if (tools.length <= DIRECT_TOOL_LIMIT) return tools;
+    return lazyCatalogTools("mcp", "mcp", "MCP", catalogEntries(tools));
+  }
+
+  async resolveCall(
+    call: ConnectorCall,
+    context: AdapterContext,
+  ): Promise<{ call: ConnectorCall; tool: ConnectorTool } | undefined> {
+    // Wrappers have no resourceId; real tools always do.
+    if (call.route?.resourceId || call.route?.toolName !== CATALOG_EXECUTE) return undefined;
+    return resolveCatalogCall(call, catalogEntries(await this.authorizedTools(context)));
+  }
+
+  private async authorizedTools(context: AdapterContext): Promise<ConnectorTool[]> {
     if (!context.botId) return [];
     const assignments = await this.prisma.botMcpServer.findMany({
       where: {
         botId: context.botId,
-        workspaceId: context.workspaceId,
+        spaceId: context.spaceId,
         userId: context.userId,
         server: { enabled: true },
       },
@@ -107,14 +134,16 @@ export class McpConnector implements ConnectorProvider {
               route: {
                 connectorId: "mcp",
                 resourceId: assignment.serverId,
+                resourceRevision: assignment.server.revision,
                 toolName: tool.name,
+                catalogGroup: assignment.server.slug,
               },
             }));
         } catch (error) {
           // A single unavailable server must not hide tools from other connectors.
-          console.error(
+          getLogger().error(
             `mcp discovery failed for server ${assignment.server.slug}:`,
-            error instanceof Error ? error.message : error,
+            sanitizeConnectorError(error),
           );
           await this.evict(this.sessionKey(assignment.server, context));
           return [];
@@ -125,7 +154,23 @@ export class McpConnector implements ConnectorProvider {
   }
 
   async *execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent> {
-    if (call.route?.connectorId !== "mcp" || !call.route.resourceId) {
+    if (call.route?.connectorId !== "mcp") {
+      yield { type: "error", message: `MCP route required for ${call.tool}` };
+      return;
+    }
+    if (isLazyCatalogControlRoute(call.route)) {
+      try {
+        yield* executeLazyCatalogControl(
+          call,
+          catalogEntries(await this.authorizedTools(context)),
+          (resolved) => this.execute(resolved, context),
+        );
+      } catch (error) {
+        yield { type: "error", message: sanitizeConnectorError(error) };
+      }
+      return;
+    }
+    if (!call.route.resourceId) {
       yield { type: "error", message: `MCP route required for ${call.tool}` };
       return;
     }
@@ -137,7 +182,7 @@ export class McpConnector implements ConnectorProvider {
       where: {
         botId: context.botId,
         serverId: call.route.resourceId,
-        workspaceId: context.workspaceId,
+        spaceId: context.spaceId,
         userId: context.userId,
         server: { enabled: true },
       },
@@ -151,17 +196,23 @@ export class McpConnector implements ConnectorProvider {
       yield { type: "error", message: "MCP tool is not assigned to this bot" };
       return;
     }
+    // Capture material before callTool so a concurrent eviction/replace cannot
+    // drop this call's OAuth secrets from model-visible redaction. Recompute via
+    // oauthMaterialSecrets(material) so in-place token refresh stays covered.
+    let material: OAuthMaterial | undefined;
     try {
-      const result = await (await this.sessionFor(assignment.server, context)).callTool(
-        call.route.toolName,
-        call.args,
-        { signal: context.signal },
-      );
-      yield { type: "result", data: result };
+      const session = await this.sessionFor(assignment.server, context);
+      material = this.sessions.get(this.sessionKey(assignment.server, context))?.material;
+      const result = await session.callTool(call.route.toolName, call.args, {
+        signal: context.signal,
+      });
+      const secrets = material ? oauthMaterialSecrets(material) : [];
+      yield { type: "result", data: redactConnectorPayload(result, secrets) };
     } catch (error) {
       // A thrown call means the transport or auth broke; drop the session so the next call reconnects.
+      const secrets = material ? oauthMaterialSecrets(material) : [];
       await this.evict(this.sessionKey(assignment.server, context));
-      yield { type: "error", message: error instanceof Error ? error.message : String(error) };
+      yield { type: "error", message: sanitizeConnectorError(error, secrets) };
     }
   }
 
@@ -175,7 +226,7 @@ export class McpConnector implements ConnectorProvider {
   private sessionKey(server: McpServer, context: AdapterContext): string {
     // Identity headers are applied once, at connect time, so a session is only
     // valid for the identity it connected as. The key has to carry that identity.
-    return `${server.id} ${context.workspaceId} ${context.userId}`;
+    return `${server.id} ${context.spaceId} ${context.userId}`;
   }
 
   private async evict(sessionKey: string): Promise<void> {
@@ -198,8 +249,8 @@ export class McpConnector implements ConnectorProvider {
     }
     if (existing) await this.evict(sessionKey);
 
-    const promise = this.connectSession(server, context).then((session) => {
-      this.sessions.set(sessionKey, { session, revision: server.revision });
+    const promise = this.connectSession(server, context).then(({ session, material }) => {
+      this.sessions.set(sessionKey, { session, revision: server.revision, material });
       return session;
     });
     this.connecting.set(sessionKey, { revision: server.revision, promise });
@@ -210,14 +261,17 @@ export class McpConnector implements ConnectorProvider {
     }
   }
 
-  private async connectSession(server: McpServer, context: AdapterContext): Promise<McpSession> {
+  private async connectSession(
+    server: McpServer,
+    context: AdapterContext,
+  ): Promise<{ session: McpSession; material: OAuthMaterial }> {
     const session = new McpSession({ name: `rakazo-${server.slug}` });
     try {
       const secret = server.secretId
         ? await this.prisma.secret.findFirst({
             where: {
               id: server.secretId,
-              workspaceId: context.workspaceId,
+              spaceId: context.spaceId,
               userId: context.userId,
             },
           })
@@ -256,7 +310,7 @@ export class McpConnector implements ConnectorProvider {
         };
         await session.connectRemote({
           url: server.endpoint,
-          urlPolicy: { allowHttpLocalhost: true, allowLocalHttpCredentials: localHttp },
+          urlPolicy: { allowHttpLocalhost: localHttp, allowLocalHttpCredentials: localHttp },
           transport: server.transport === "sse" ? "sse" : "streamable-http",
           allowLegacySse: server.transport === "sse",
           headerPolicy: { headers },
@@ -266,7 +320,7 @@ export class McpConnector implements ConnectorProvider {
           signal: context.signal,
         });
       }
-      return session;
+      return { session, material };
     } catch (error) {
       await session.close().catch(() => undefined);
       throw error;

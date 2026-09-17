@@ -18,15 +18,12 @@ MAX_ARGV = 32
 MAX_ARG_LEN = 16_384
 KNOWN_LAUNCH = frozenset(
     {
-        "chromium",
-        "chromium-browser",
-        "firefox",
-        "google-chrome",
-        "google-chrome-stable",
         "rakazo-browser",
         "xterm",
     }
 )
+CONTROL_TIMEOUT_SEC = 10
+LAUNCH_SPAWN_POLL_SEC = 0.2
 NATIVE_CAPTURES = {}
 NATIVE_LOCK = threading.Lock()
 DISPLAY_LOCKS = {}
@@ -153,6 +150,11 @@ def allowed_xdotool_argv(argv):
     return False
 
 
+def control_command_index(argv):
+    """Locate the executable after the optional supervisor-owned browser profile."""
+    return 3 if len(argv) > 2 and argv[2].startswith("RAKAZO_BROWSER_PROFILE=") else 2
+
+
 def allowed_control_argv(argv, display):
     """Only supervisor-shaped argv for the locked display."""
     if not isinstance(argv, list) or not (3 <= len(argv) <= MAX_ARGV):
@@ -161,14 +163,50 @@ def allowed_control_argv(argv, display):
         return False
     if argv[0] != "env" or argv[1] != f"DISPLAY={display}":
         return False
-    command = argv[2]
+    index = control_command_index(argv)
+    if index >= len(argv):
+        return False
+    command = argv[index]
+    if index == 3:
+        profile = argv[2].removeprefix("RAKAZO_BROWSER_PROFILE=")
+        if not re.fullmatch(r"/home/rakazo/\.browser-profiles/chromium-bot-[a-f0-9]{32}", profile):
+            return False
+        if command not in ("xdg-open", "rakazo-browser"):
+            return False
     if command == "xdotool":
         return allowed_xdotool_argv(argv)
     if command == "xdg-open":
-        return len(argv) == 4
+        return len(argv) == index + 2
     if "/" in command or command not in KNOWN_LAUNCH:
         return False
-    return len(argv) in (3, 4)
+    return len(argv) in (index + 1, index + 2)
+
+
+def is_long_lived_control(argv):
+    """Apps and openers that must not be waited on under display_lock."""
+    command = argv[control_command_index(argv)]
+    return command == "xdg-open" or command in KNOWN_LAUNCH
+
+
+def run_control_argv(argv, display):
+    """Run a fallback control command without holding the lock forever."""
+    env = {**os.environ, "DISPLAY": display}
+    if is_long_lived_control(argv):
+        child = subprocess.Popen(argv, env=env, start_new_session=True)
+        try:
+            code = child.wait(timeout=LAUNCH_SPAWN_POLL_SEC)
+        except subprocess.TimeoutExpired:
+            threading.Thread(target=child.wait, daemon=True).start()
+            return
+        if code:
+            raise RuntimeError("computer action failed")
+        return
+    try:
+        result = subprocess.run(argv, env=env, timeout=CONTROL_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("computer action timed out") from error
+    if result.returncode:
+        raise RuntimeError("computer action failed")
 
 
 def capture(display):
@@ -245,9 +283,7 @@ class Handler(BaseHTTPRequestHandler):
                             drop_native_capture(display)
                             handled = 0
                     if not handled:
-                        result = subprocess.run(argv, env={**os.environ, "DISPLAY": display})
-                        if result.returncode:
-                            raise RuntimeError("computer action failed")
+                        run_control_argv(argv, display)
                 settle_ms = max(0, min(int(body.get("settleMs", 0)), 5000))
                 if settle_ms:
                     time.sleep(settle_ms / 1000)
