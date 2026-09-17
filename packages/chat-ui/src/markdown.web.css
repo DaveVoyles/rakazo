@@ -224,3 +224,20 @@
     opacity: 0;
   }
 }
+
+.rk-mermaid-block {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--card, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  padding: 16px;
+  margin: 12px 0;
+  overflow-x: auto;
+}
+
+.rk-mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}

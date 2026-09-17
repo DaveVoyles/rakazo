@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from "react";
+import { isValidElement, memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./markdown.web.css";
@@ -41,8 +41,78 @@ function CheckIcon() {
     </svg>
   );
 }
+interface CodeElementProps {
+  className?: string;
+  children?: React.ReactNode;
+}
+
+function MermaidBlock({ chart }: { chart: string }) {
+  const [svg, setSvg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const rawId = useId();
+  const id = `mm_${rawId.replace(/[^a-zA-Z0-9]/g, "_")}`;
+
+  useEffect(() => {
+    let active = true;
+    import("mermaid")
+      .then((m) => {
+        if (!active) return;
+        const mermaid = m.default;
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: "neutral",
+          securityLevel: "loose",
+        });
+        return mermaid.render(id, chart);
+      })
+      .then((result) => {
+        if (active && result?.svg) {
+          setSvg(result.svg);
+        }
+      })
+      .catch((err: unknown) => {
+        if (active) {
+          const message = err instanceof Error ? err.message : String(err);
+          setError(message || "Could not render Mermaid diagram");
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [chart, id]);
+
+  if (svg) {
+    return (
+      <div
+        className="rk-mermaid-block my-3 overflow-x-auto rounded-lg border border-border bg-card p-4 shadow-sm"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    );
+  }
+
+  return (
+    <div className="rk-chat-markdown-pre-wrap my-2">
+      <pre className="text-xs font-mono">{chart}</pre>
+      {error ? (
+        <p className="mt-1 text-[11px] text-destructive">{error}</p>
+      ) : (
+        <span className="text-[11px] text-muted-foreground">Rendering diagram...</span>
+      )}
+    </div>
+  );
+}
 
 function CodeBlock(props: React.ComponentPropsWithoutRef<"pre">) {
+  const child = props.children;
+  if (
+    isValidElement<CodeElementProps>(child) &&
+    typeof child.props.className === "string" &&
+    child.props.className.includes("language-mermaid")
+  ) {
+    const chart = String(child.props.children || "").trim();
+    return <MermaidBlock chart={chart} />;
+  }
   const preRef = useRef<HTMLPreElement>(null);
   const resetTimerRef = useRef<number | undefined>(undefined);
   const [copied, setCopied] = useState(false);

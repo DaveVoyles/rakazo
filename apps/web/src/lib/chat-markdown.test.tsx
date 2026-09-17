@@ -42,4 +42,13 @@ describe("ChatMarkdown", () => {
     expect(html).toContain('aria-label="Copy code"');
     expect(html).toContain("rk-chat-markdown-copy");
   });
+
+  it("renders mermaid blocks safely in static markup", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown>{"```mermaid\ngraph TD\nA --> B\n```"}</ChatMarkdown>,
+    );
+
+    expect(html).toContain("graph TD");
+    expect(html).toContain("A --&gt; B");
+  });
 });
