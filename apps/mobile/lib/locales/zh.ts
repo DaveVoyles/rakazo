@@ -578,4 +578,5 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Extra high": "超高",
   Low: "低",
   High: "高",
+  "/learn-workflow <name> — Distill chat into a reusable skill": "/learn-workflow <name> — Distill chat into a reusable skill",
 };

@@ -47,6 +47,7 @@ describe("SLASH_ACTIONS", () => {
       "action-review",
       "action-status",
       "action-doctor",
+      "action-learn",
       "chat-settings",
       "settings-general",
       "settings-usage",

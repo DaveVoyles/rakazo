@@ -4919,6 +4919,11 @@ const Composer = memo(function Composer({
       focusComposer();
       return;
     }
+    if (action === "action-learn") {
+      setDraft("learn-workflow: ");
+      focusComposer();
+      return;
+    }
     setDraft("");
     onSlashAction?.(action);
   }

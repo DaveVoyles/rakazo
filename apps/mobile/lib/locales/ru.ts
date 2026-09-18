@@ -594,4 +594,5 @@ export const RU_MESSAGES: Record<string, string> = {
   "{name} (permission denied)": "{name} (в разрешении отказано)",
   "{name} (unsupported type)": "{name} (неподдерживаемый тип)",
   "Saved {name} locally": "{name} сохранен локально.",
+  "/learn-workflow <name> — Distill chat into a reusable skill": "/learn-workflow <name> — Distill chat into a reusable skill",
 };

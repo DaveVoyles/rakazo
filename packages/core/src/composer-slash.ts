@@ -4,6 +4,7 @@ export const SLASH_ACTIONS = [
   { id: "action-review" as const, label: "/review <repo> #N — Launch ReviewerBot on PR" },
   { id: "action-status" as const, label: "/status <repo> #N — Check issue & PR run status" },
   { id: "action-doctor" as const, label: "/doctor — Platform diagnostics & profile health" },
+  { id: "action-learn" as const, label: "/learn-workflow <name> — Distill chat into a reusable skill" },
   { id: "chat-settings" as const, label: "Chat Settings" },
   { id: "settings-general" as const, label: "Settings: General" },
   { id: "settings-usage" as const, label: "Settings: Usage" },
